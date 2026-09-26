@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153  # HOST_IP etc. come from .env via load_env
-# socinabox — stand up a home SOC (Elastic SIEM + Fleet + Defend, Zeek/Suricata later) on one box.
+# moat — stand up a home SOC (Elastic SIEM + Fleet + Defend, Zeek/Suricata later) on one box.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -17,7 +17,7 @@ hdr()  { printf '\n%s%s%s\n' "$B" "$*" "$N"; }
 
 compose() { docker compose --env-file "$ENV_FILE" "$@"; }
 load_env() {
-  [[ -f $ENV_FILE ]] || die "no .env yet — run ./socinabox init first"
+  [[ -f $ENV_FILE ]] || die "no .env yet — run ./moat init first"
   set -a; # shellcheck disable=SC1090
   source "$ENV_FILE"; set +a
 }
@@ -25,7 +25,7 @@ load_env() {
 kb() {
   local method=$1 path=$2 body=${3:-}
   local args=(-sS --fail-with-body --cacert /certs/ca/ca.crt -u "elastic:${ELASTIC_PASSWORD}" -X "$method"
-              -H 'Content-Type: application/json' -H 'kbn-xsrf: socinabox' "https://localhost:5601${path}")
+              -H 'Content-Type: application/json' -H 'kbn-xsrf: moat' "https://localhost:5601${path}")
   [[ -n $body ]] && args+=(-d "$body")
   compose exec -T kibana curl "${args[@]}"
 }
@@ -37,7 +37,7 @@ es() {
   compose exec -T es01 curl "${args[@]}"
 }
 # jq from the setup image, so the host needs no extra packages.
-jqc() { docker run --rm -i --entrypoint jq socinabox-setup:local "$@"; }
+jqc() { docker run --rm -i --entrypoint jq moat-setup:local "$@"; }
 rand() { tr -dc 'A-Za-z0-9' </dev/urandom | head -c "${1:-32}" || true; }
 default_ip() { ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src"){print $(i+1); exit}}'; }
 
@@ -75,14 +75,14 @@ cmd_preflight() {
   if (( mmc >= MIN_MAP_COUNT )); then ok "vm.max_map_count=$mmc"
   else
     bad "vm.max_map_count=$mmc (need $MIN_MAP_COUNT). Fix:"
-    echo "      echo 'vm.max_map_count=$MIN_MAP_COUNT' | sudo tee /etc/sysctl.d/99-socinabox.conf && sudo sysctl --system"
+    echo "      echo 'vm.max_map_count=$MIN_MAP_COUNT' | sudo tee /etc/sysctl.d/99-moat.conf && sudo sysctl --system"
     fail=1
   fi
 
   hdr "Ports"
   for p in 443 8220 9200; do
     if ss -Hltn "sport = :$p" 2>/dev/null | grep -q .; then
-      if docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep -q "socinabox.*:$p->"; then ok "$p in use by socinabox"
+      if docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep -q "moat.*:$p->"; then ok "$p in use by moat"
       else bad "port $p already in use"; fail=1; fi
     else ok "port $p free"; fi
   done
@@ -129,7 +129,7 @@ cmd_init() {
     esac
   done
   if [[ -f $ENV_FILE && $force -eq 0 ]]; then
-    die ".env already exists (it holds your passwords). Use --force to regenerate, which requires './socinabox destroy' first."
+    die ".env already exists (it holds your passwords). Use --force to regenerate, which requires './moat destroy' first."
   fi
 
   local mem_gb; mem_gb=$(awk '/MemTotal/{printf "%d", $2/1024/1024 + 0.5}' /proc/meminfo)
@@ -141,10 +141,10 @@ cmd_init() {
     if (( yes )) || [[ -n ${!__v} ]]; then [[ -z ${!__v} ]] && printf -v "$__v" "%s" "$def"; return 0; fi
     read -rp "  $prompt [$def]: " ans; printf -v "$__v" '%s' "${ans:-$def}"
   }
-  hdr "socinabox init"
+  hdr "moat init"
   ask profile   "Profile (standard|lite)" "$def_profile"
   ask host_ip   "LAN IP endpoints will use to reach this box" "${def_ip:-192.168.1.50}"
-  ask host_name "Hostname for certificates" "socinabox.local"
+  ask host_name "Hostname for certificates" "moat.local"
   ask sensor    "Sensor interface for mirrored traffic (blank = none yet)" ""
   [[ $profile == standard || $profile == lite ]] || die "profile must be standard or lite"
   [[ $host_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid IP: $host_ip"
@@ -171,28 +171,28 @@ cmd_init() {
       .env.example > "$ENV_FILE.tmp"
   chmod 600 "$ENV_FILE.tmp"; mv "$ENV_FILE.tmp" "$ENV_FILE"
   ok "wrote .env (mode 600) — profile=$profile host=$host_ip"
-  echo "  Next: ./socinabox up"
+  echo "  Next: ./moat up"
 }
 
 # ---------------------------------------------------------------- lifecycle
 cmd_up() {
   load_env
-  hdr "Starting socinabox (first run pulls ~3 GB of images and takes 5–10 minutes)"
+  hdr "Starting moat (first run pulls ~3 GB of images and takes 5–10 minutes)"
   compose up -d --build --wait --wait-timeout 1200 es01 kibana caddy
   compose up -d fleet-server  # waits on bootstrap (Fleet, Defend, rules)
   local rc; rc=$(compose ps -a bootstrap --format '{{.ExitCode}}' 2>/dev/null || echo "?")
-  [[ $rc == 0 ]] || { compose logs bootstrap | tail -20; die "bootstrap failed (exit $rc) — fix and run ./socinabox bootstrap"; }
+  [[ $rc == 0 ]] || { compose logs bootstrap | tail -20; die "bootstrap failed (exit $rc) — fix and run ./moat bootstrap"; }
   echo
   printf '%sReady.%s Kibana: https://%s%s\n' "$G" "$N" "$HOST_IP" "$([[ $KIBANA_PORT == 443 ]] || echo ":$KIBANA_PORT")"
-  echo "  Log in as 'analyst' (password: ./socinabox creds). Browser will warn about the local CA — see docs."
-  echo "  Enroll endpoints: ./socinabox enroll"
+  echo "  Log in as 'analyst' (password: ./moat creds). Browser will warn about the local CA — see docs."
+  echo "  Enroll endpoints: ./moat enroll"
 }
 cmd_down()      { load_env; compose down; }
 cmd_logs()      { load_env; compose logs -f --tail=100 "$@"; }
 cmd_bootstrap() { load_env; compose run --rm bootstrap /setup/bootstrap.sh; }
 cmd_destroy() {
   load_env
-  read -rp "This deletes ALL socinabox data, certs and enrolled-agent trust. Type 'destroy' to confirm: " a
+  read -rp "This deletes ALL moat data, certs and enrolled-agent trust. Type 'destroy' to confirm: " a
   [[ $a == destroy ]] || die "aborted"
   compose down -v --remove-orphans
   ok "stack and volumes removed (.env kept; delete it and re-run init for new secrets)"
@@ -229,35 +229,35 @@ cmd_enroll() {
   load_env
   local key
   key=$(kb GET '/api/fleet/enrollment_api_keys?perPage=100' \
-        | jqc -r '[.items[] | select(.policy_id=="socinabox-endpoints" and .active)][0].api_key // empty')
+        | jqc -r '[.items[] | select(.policy_id=="moat-endpoints" and .active)][0].api_key // empty')
   [[ -n $key ]] || die "no enrollment token for the Endpoints policy yet — is bootstrap finished?"
   local fp; fp=$(compose exec -T caddy cat /certs/public/ca.sha256 | tr -d '\r\n')
   local v=$STACK_VERSION fleet="https://$HOST_IP:$FLEET_PORT" base="https://$HOST_IP"
   [[ $KIBANA_PORT == 443 ]] || base+=":$KIBANA_PORT"
   cat <<EOF
-${B}Enroll an endpoint into socinabox${N}  (policy: Endpoints — System + Elastic Defend)
+${B}Enroll an endpoint into moat${N}  (policy: Endpoints — System + Elastic Defend)
 CA fingerprint (sha256): $fp
 
 ${B}Linux (x86_64), as root:${N}
-  curl -sk $base/socinabox-ca.crt -o /etc/socinabox-ca.crt
-  openssl x509 -in /etc/socinabox-ca.crt -noout -fingerprint -sha256 | tr -d : | grep -qi $fp && echo CA OK
+  curl -sk $base/moat-ca.crt -o /etc/moat-ca.crt
+  openssl x509 -in /etc/moat-ca.crt -noout -fingerprint -sha256 | tr -d : | grep -qi $fp && echo CA OK
   curl -LO https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-$v-linux-x86_64.tar.gz
   tar xzf elastic-agent-$v-linux-x86_64.tar.gz && cd elastic-agent-$v-linux-x86_64
-  ./elastic-agent install --non-interactive --url=$fleet --enrollment-token=$key --certificate-authorities=/etc/socinabox-ca.crt
+  ./elastic-agent install --non-interactive --url=$fleet --enrollment-token=$key --certificate-authorities=/etc/moat-ca.crt
 
 ${B}Windows, in an elevated PowerShell:${N}
-  \$ca="C:\\ProgramData\\socinabox-ca.crt"
-  [Net.ServicePointManager]::ServerCertificateValidationCallback={\$true}; (New-Object Net.WebClient).DownloadFile("$base/socinabox-ca.crt",\$ca)
+  \$ca="C:\\ProgramData\\moat-ca.crt"
+  [Net.ServicePointManager]::ServerCertificateValidationCallback={\$true}; (New-Object Net.WebClient).DownloadFile("$base/moat-ca.crt",\$ca)
   (Get-FileHash -Algorithm SHA256 -InputStream ([IO.MemoryStream]::new([Security.Cryptography.X509Certificates.X509Certificate2]::new(\$ca).RawData))).Hash  # should equal $fp
   \$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-$v-windows-x86_64.zip -OutFile agent.zip
   Expand-Archive agent.zip -DestinationPath .; cd elastic-agent-$v-windows-x86_64
   .\\elastic-agent.exe install --non-interactive --url=$fleet --enrollment-token=$key --certificate-authorities=\$ca
 
 ${B}macOS (Apple silicon), as root:${N}
-  curl -sk $base/socinabox-ca.crt -o /Library/Application\\ Support/socinabox-ca.crt
+  curl -sk $base/moat-ca.crt -o /Library/Application\\ Support/moat-ca.crt
   curl -LO https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-$v-darwin-aarch64.tar.gz
   tar xzf elastic-agent-$v-darwin-aarch64.tar.gz && cd elastic-agent-$v-darwin-aarch64
-  ./elastic-agent install --non-interactive --url=$fleet --enrollment-token=$key --certificate-authorities="/Library/Application Support/socinabox-ca.crt"
+  ./elastic-agent install --non-interactive --url=$fleet --enrollment-token=$key --certificate-authorities="/Library/Application Support/moat-ca.crt"
   (macOS needs Full Disk Access + system extension approval for Elastic Defend — see Elastic docs.)
 EOF
 }
@@ -265,7 +265,7 @@ EOF
 # ---------------------------------------------------------------- sensor NIC (Phase 2 prep)
 cmd_sensor_prep() {
   local ifc=${1:-}; [[ -n $ifc ]] || { load_env; ifc=${SENSOR_IFACE:-}; }
-  [[ -n $ifc && -e /sys/class/net/$ifc ]] || die "usage: ./socinabox sensor-prep <iface>"
+  [[ -n $ifc && -e /sys/class/net/$ifc ]] || die "usage: ./moat sensor-prep <iface>"
   [[ $EUID -eq 0 ]] || die "run with sudo"
   if ip -4 -o addr show dev "$ifc" | grep -q inet; then
     warn "$ifc has an IP address; a sensor NIC should not. Remove it from netplan/NetworkManager."
@@ -282,7 +282,7 @@ cmd_sensor_prep() {
 
 usage() {
   cat <<EOF
-${B}socinabox${N} — home SOC in a box
+${B}moat${N} — a home SOC for threat hunting
 
   preflight            Check host readiness (RAM, disk, Docker, kernel, ports, NICs)
   init [opts]          Generate .env with secrets   (--profile lite|standard --host-ip IP --sensor-iface IF -y)

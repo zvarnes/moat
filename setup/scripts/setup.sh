@@ -16,7 +16,7 @@ if [[ -s $TOKEN_FILE ]] && curl -sf --cacert "$CA" \
   log "fleet-server service token still valid"
 else
   log "creating fleet-server service token"
-  name="socinabox-$(date +%s)"
+  name="moat-$(date +%s)"
   es POST "/_security/service/elastic/fleet-server/credential/token/${name}" \
     | jq -r '.token.value' > "$TOKEN_FILE"
   [[ -s $TOKEN_FILE ]] || die "failed to create service token"

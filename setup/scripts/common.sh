@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Shared helpers for socinabox setup containers.
+# Shared helpers for moat setup containers.
 set -euo pipefail
 
 CA=/certs/ca/ca.crt
 ES_URL=${ES_URL:-https://es01:9200}
 KIBANA_URL=${KIBANA_URL:-https://kibana:5601}
 
-log() { printf '[socinabox:%s] %s\n' "${STEP:-setup}" "$*"; }
+log() { printf '[moat:%s] %s\n' "${STEP:-setup}" "$*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
 
 # es METHOD PATH [JSON]  -> prints body, fails on HTTP >= 400
@@ -22,7 +22,7 @@ es() {
 kb() {
   local method=$1 path=$2 body=${3:-}
   local args=(-sS --fail-with-body --cacert "$CA" -u "elastic:${ELASTIC_PASSWORD}" -X "$method"
-              -H 'Content-Type: application/json' -H 'kbn-xsrf: socinabox'
+              -H 'Content-Type: application/json' -H 'kbn-xsrf: moat'
               -H 'elastic-api-version: 2023-10-31' "${KIBANA_URL}${path}")
   [[ -n $body ]] && args+=(-d "$body")
   curl "${args[@]}"

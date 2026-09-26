@@ -1,20 +1,20 @@
-# socinabox
+# moat
 
-A free, one-box home SOC for threat hunting with the same tools real SOCs use: **Elastic Security** (SIEM, detections, Timeline, Cases), **Fleet + Elastic Defend** (EDR telemetry), and soon **Zeek + Suricata** for network visibility.
+**moat** is a free, one-box home SOC for threat hunting with the same tools real SOCs use: **Elastic Security** (SIEM, detections, Timeline, Cases), **Fleet + Elastic Defend** (EDR telemetry), and soon **Zeek + Suricata** for network visibility.
 
 > Status: **Phase 1 (core SIEM)**. Network sensing lands in Phase 2.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/<you>/socinabox && cd socinabox
-./socinabox preflight     # RAM, disk, Docker, vm.max_map_count, ports, NICs
-./socinabox init          # picks profile, detects LAN IP, generates secrets into .env
-./socinabox up            # ES + Kibana + Fleet Server + Caddy, bootstraps Defend + rules
-./socinabox enroll        # one-line agent installs for Linux / Windows / macOS
+git clone https://github.com/<you>/moat && cd moat
+./moat preflight     # RAM, disk, Docker, vm.max_map_count, ports, NICs
+./moat init          # picks profile, detects LAN IP, generates secrets into .env
+./moat up            # ES + Kibana + Fleet Server + Caddy, bootstraps Defend + rules
+./moat enroll        # one-line agent installs for Linux / Windows / macOS
 ```
 
-Then browse to `https://<HOST_IP>` and log in as `analyst` (`./socinabox creds`).
+Then browse to `https://<HOST_IP>` and log in as `analyst` (`./moat creds`).
 
 ## What `up` builds
 
@@ -42,7 +42,7 @@ All ports bind only to `HOST_IP`. Don't port-forward them; use Tailscale/WireGua
 
 ## Commands
 
-Run `./socinabox help`. Highlights: `status` (health, agents, event counts), `bootstrap` (re-run Fleet/Defend/rules setup), `sensor-prep <iface>` (capture-mode NIC), `destroy` (wipe everything).
+Run `./moat help`. Highlights: `status` (health, agents, event counts), `bootstrap` (re-run Fleet/Defend/rules setup), `sensor-prep <iface>` (capture-mode NIC), `destroy` (wipe everything).
 
 ## Docs
 

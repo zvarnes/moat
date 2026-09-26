@@ -1,8 +1,8 @@
-name: socinabox
+name: moat
 
 x-setup: &setup
   build: ./setup
-  image: socinabox-setup:local
+  image: moat-setup:local
   env_file: .env
   networks: [soc]
   restart: "no"
@@ -23,7 +23,7 @@ services:
       certs: { condition: service_completed_successfully }
     environment:
       - node.name=es01
-      - cluster.name=socinabox
+      - cluster.name=moat
       - discovery.type=single-node
       - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
       - bootstrap.memory_lock=true
@@ -76,9 +76,9 @@ services:
     mem_limit: ${KIBANA_MEM_LIMIT}
     volumes:
       - certs:/certs:ro
-      - kibana-config:/usr/share/kibana/config/socinabox:ro
+      - kibana-config:/usr/share/kibana/config/moat:ro
       - kibanadata:/usr/share/kibana/data
-    command: ["/usr/local/bin/kibana-docker", "--config", "/usr/share/kibana/config/socinabox/kibana.yml"]
+    command: ["/usr/local/bin/kibana-docker", "--config", "/usr/share/kibana/config/moat/kibana.yml"]
     networks: [soc]
     restart: unless-stopped
     healthcheck:

@@ -1,8 +1,8 @@
 # Puts a mirrored-traffic NIC into capture mode at boot.
-# Install:  sudo cp sensors/socinabox-sensor-nic@.service /etc/systemd/system/
-#           sudo systemctl enable --now socinabox-sensor-nic@<iface>.service
+# Install:  sudo cp sensors/moat-sensor-nic@.service /etc/systemd/system/
+#           sudo systemctl enable --now moat-sensor-nic@<iface>.service
 [Unit]
-Description=socinabox sensor NIC capture mode on %i
+Description=moat sensor NIC capture mode on %i
 After=network-pre.target sys-subsystem-net-devices-%i.device
 BindsTo=sys-subsystem-net-devices-%i.device
 

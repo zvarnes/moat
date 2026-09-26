@@ -5,15 +5,15 @@ export STEP=certs
 # shellcheck source=common.sh
 source /setup/common.sh
 
-: "${HOST_IP:?HOST_IP must be set (run ./socinabox init)}"
-HOST_NAME=${HOST_NAME:-socinabox.local}
+: "${HOST_IP:?HOST_IP must be set (run ./moat init)}"
+HOST_NAME=${HOST_NAME:-moat.local}
 
 mkdir -p /certs/ca /certs/public /config
 
 if [[ ! -f /certs/ca/ca.key ]]; then
   log "creating local CA"
   openssl req -x509 -new -nodes -newkey rsa:4096 -sha256 -days 3650 \
-    -subj "/O=socinabox/CN=socinabox local CA" \
+    -subj "/O=moat/CN=moat local CA" \
     -keyout /certs/ca/ca.key -out /certs/ca/ca.crt 2>/dev/null
 fi
 
@@ -25,7 +25,7 @@ issue() { # issue NAME DNS1,DNS2,...
   IFS=, read -ra names <<<"$dns"
   for n in "${names[@]}"; do san+=",DNS:$n"; done
   log "issuing cert for $name ($san)"
-  openssl req -new -nodes -newkey rsa:2048 -subj "/O=socinabox/CN=$name" \
+  openssl req -new -nodes -newkey rsa:2048 -subj "/O=moat/CN=$name" \
     -keyout "$dir/$name.key" -out "$dir/$name.csr" 2>/dev/null
   openssl x509 -req -in "$dir/$name.csr" -CA /certs/ca/ca.crt -CAkey /certs/ca/ca.key \
     -CAcreateserial -days 825 -sha256 -out "$dir/$name.crt" \

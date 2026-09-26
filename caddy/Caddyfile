@@ -14,12 +14,12 @@
 	}
 
 	# Public CA cert + fingerprint for agent enrollment (no secrets live here).
-	handle /socinabox-ca.crt {
+	handle /moat-ca.crt {
 		root * /certs/public
 		rewrite * /ca.crt
 		file_server
 	}
-	handle /socinabox-ca.sha256 {
+	handle /moat-ca.sha256 {
 		root * /certs/public
 		rewrite * /ca.sha256
 		file_server

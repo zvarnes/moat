@@ -1,15 +1,15 @@
-# Mirroring traffic from UniFi to the socinabox sensor NIC
+# Mirroring traffic from UniFi to the moat sensor NIC
 
-Goal: copy the traffic on your busiest LAN link to a port that feeds the socinabox sensor NIC (your USB-C Ethernet adapter), so Zeek and Suricata see it.
+Goal: copy the traffic on your busiest LAN link to a port that feeds the moat sensor NIC (your USB-C Ethernet adapter), so Zeek and Suricata see it.
 
 ```
              Internet
                 │
            ┌────┴─────┐
            │ UDM Pro  │  port A ── uplink to main switch / APs  (mirror SOURCE)
-           │          │  port B ── socinabox USB NIC            (mirror DESTINATION)
+           │          │  port B ── moat USB NIC                  (mirror DESTINATION)
            └──────────┘
-   socinabox built-in NIC ── any normal LAN port (management + agent traffic)
+   moat built-in NIC ── any normal LAN port (management + agent traffic)
 ```
 
 ## 1. Pick the source port
@@ -39,7 +39,7 @@ Plug the USB-C Ethernet adapter into that destination port.
 Find the adapter name (usually `enx<mac>` for USB NICs):
 
 ```bash
-./socinabox preflight          # lists NICs; the USB one shows bus "usb"
+./moat preflight          # lists NICs; the USB one shows bus "usb"
 ```
 
 Make sure NetworkManager / netplan won't put an IP on it. On Ubuntu Desktop:
@@ -48,7 +48,7 @@ Make sure NetworkManager / netplan won't put an IP on it. On Ubuntu Desktop:
 nmcli device set enx001122334455 managed no
 ```
 
-On Ubuntu Server (netplan), add to `/etc/netplan/99-socinabox.yaml` and `sudo netplan apply`:
+On Ubuntu Server (netplan), add to `/etc/netplan/99-moat.yaml` and `sudo netplan apply`:
 
 ```yaml
 network:
@@ -65,9 +65,9 @@ Put it in capture mode now and on every boot:
 
 ```bash
 sudo apt install -y ethtool tcpdump
-sudo ./socinabox sensor-prep enx001122334455
-sudo cp sensors/socinabox-sensor-nic@.service /etc/systemd/system/
-sudo systemctl enable --now socinabox-sensor-nic@enx001122334455.service
+sudo ./moat sensor-prep enx001122334455
+sudo cp sensors/moat-sensor-nic@.service /etc/systemd/system/
+sudo systemctl enable --now moat-sensor-nic@enx001122334455.service
 ```
 
 ## 4. Verify you're seeing mirrored traffic

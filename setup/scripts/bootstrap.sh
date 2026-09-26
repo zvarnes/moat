@@ -23,7 +23,7 @@ else
     name: "defend-endpoints",
     description: "Elastic Defend, EDR Complete preset",
     namespace: "default",
-    policy_ids: ["socinabox-endpoints"],
+    policy_ids: ["moat-endpoints"],
     enabled: true,
     package: {name: "endpoint", version: $v},
     inputs: [{
@@ -33,8 +33,8 @@ else
 fi
 
 # --- Analyst role + user (daily driver; elastic stays for admin) ---
-log "ensuring socinabox_analyst role and analyst user"
-kb PUT /api/security/role/socinabox_analyst "$(jq -n '{
+log "ensuring moat_analyst role and analyst user"
+kb PUT /api/security/role/moat_analyst "$(jq -n '{
   elasticsearch: {
     cluster: ["monitor"],
     indices: [{names: ["logs-*", "metrics-*", ".alerts-security*", ".siem-signals*",
@@ -46,13 +46,13 @@ kb PUT /api/security/role/socinabox_analyst "$(jq -n '{
   kibana: [{base: ["all"], feature: {}, spaces: ["*"]}]
 }')" >/dev/null
 es POST /_security/user/analyst "$(jq -n --arg p "$ANALYST_PASSWORD" '{
-  password: $p, roles: ["socinabox_analyst"], full_name: "socinabox analyst"}')" >/dev/null
+  password: $p, roles: ["moat_analyst"], full_name: "moat analyst"}')" >/dev/null
 
 # --- Detection rules ---
 log "installing prebuilt detection rules (this can take a minute)"
 kb POST /api/detection_engine/index >/dev/null 2>&1 || true
 kb PUT /api/detection_engine/rules/prepackaged | jq -c '{rules_installed, rules_updated}' || \
-  log "WARN: prebuilt rule install failed; retry with ./socinabox bootstrap"
+  log "WARN: prebuilt rule install failed; retry with ./moat bootstrap"
 
 IFS='|' read -ra tags <<<"${ENABLE_RULE_TAGS:-}"
 for tag in "${tags[@]}"; do
