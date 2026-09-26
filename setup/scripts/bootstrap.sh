@@ -8,8 +8,30 @@ source /setup/common.sh
 kibana_ready() { kb GET /api/status | jq -e '.status.overall.level == "available"'; }
 wait_for "Kibana" kibana_ready
 
+# --- Single-node replicas ---
+# Fleet data streams default to 1 replica, which a single node can't place (cluster
+# goes yellow). The *@custom hooks are composed into every logs/metrics/traces
+# template, including Elastic Defend's. Don't clobber a user's own @custom template.
+for t in logs metrics traces; do
+  if es GET "/_component_template/${t}@custom" >/dev/null 2>&1; then
+    log "${t}@custom exists, leaving it alone"
+  else
+    log "creating ${t}@custom (auto_expand_replicas 0-1)"
+    es PUT "/_component_template/${t}@custom" \
+      '{"template":{"settings":{"index":{"auto_expand_replicas":"0-1"}}},"_meta":{"managed_by":"moat"}}' >/dev/null
+  fi
+done
+# Indices created before the templates existed (upgrades from earlier moat runs).
+es PUT "/logs-*,metrics-*,traces-*,.logs-*/_settings?expand_wildcards=all&allow_no_indices=true" \
+  '{"index":{"auto_expand_replicas":"0-1"}}' >/dev/null
+
 log "initializing Fleet"
-kb POST /api/fleet/setup >/dev/null
+# Preconfiguration problems (e.g. a license-gated setting) come back as nonFatalErrors
+# and Kibana then silently skips the affected policy, so treat them as fatal.
+errs=$(kb POST /api/fleet/setup | jq -c '.nonFatalErrors // []')
+[[ $errs == "[]" ]] || die "Fleet setup reported errors: $errs"
+kb GET /api/fleet/agent_policies/fleet-server-policy >/dev/null \
+  || die "fleet-server-policy missing after Fleet setup; check kibana.yml preconfiguration"
 
 # --- Elastic Defend on the Endpoints policy ---
 if kb GET "/api/fleet/package_policies?perPage=100&kuery=ingest-package-policies.name:defend-endpoints" \

@@ -151,7 +151,7 @@ cmd_init() {
 
   local heap limit kmem fmem
   if [[ $profile == lite ]]; then heap=2g; limit=3g; kmem=1g; fmem=512m
-  else heap=4g; limit=6g; kmem=1536m; fmem=768m; fi
+  else heap=4g; limit=6g; kmem=2g; fmem=768m; fi
 
   sed -e "s|^PROFILE=.*|PROFILE=$profile|" \
       -e "s|^HOST_IP=.*|HOST_IP=$host_ip|" \
@@ -179,9 +179,12 @@ cmd_up() {
   load_env
   hdr "Starting moat (first run pulls ~3 GB of images and takes 5–10 minutes)"
   compose up -d --build --wait --wait-timeout 1200 es01 kibana caddy
-  compose up -d fleet-server  # waits on bootstrap (Fleet, Defend, rules)
+  # Waits on bootstrap (Fleet, Defend, rules), then on Fleet Server reporting HEALTHY.
+  compose up -d --wait --wait-timeout 600 fleet-server || true
   local rc; rc=$(compose ps -a bootstrap --format '{{.ExitCode}}' 2>/dev/null || echo "?")
   [[ $rc == 0 ]] || { compose logs bootstrap | tail -20; die "bootstrap failed (exit $rc) — fix and run ./moat bootstrap"; }
+  local fs; fs=$(compose ps fleet-server --format '{{.Health}}' 2>/dev/null || true)
+  [[ $fs == healthy ]] || { compose logs --tail 20 fleet-server; die "fleet-server is not healthy (${fs:-not running}) — see ./moat logs fleet-server"; }
   echo
   printf '%sReady.%s Kibana: https://%s%s\n' "$G" "$N" "$HOST_IP" "$([[ $KIBANA_PORT == 443 ]] || echo ":$KIBANA_PORT")"
   echo "  Log in as 'analyst' (password: ./moat creds). Browser will warn about the local CA — see docs."

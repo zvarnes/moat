@@ -14,11 +14,14 @@ TOKEN_FILE=/tokens/fleet-server.token
 if [[ -s $TOKEN_FILE ]] && curl -sf --cacert "$CA" \
      -H "Authorization: Bearer $(cat "$TOKEN_FILE")" "${ES_URL}/_security/_authenticate" >/dev/null; then
   log "fleet-server service token still valid"
+  # Older runs wrote a trailing newline, which Fleet Server sends verbatim in the header.
+  printf '%s' "$(cat "$TOKEN_FILE")" > "$TOKEN_FILE.tmp" && mv "$TOKEN_FILE.tmp" "$TOKEN_FILE"
 else
   log "creating fleet-server service token"
   name="moat-$(date +%s)"
+  # -j: no trailing newline; Fleet Server uses the file bytes as-is in the Authorization header.
   es POST "/_security/service/elastic/fleet-server/credential/token/${name}" \
-    | jq -r '.token.value' > "$TOKEN_FILE"
+    | jq -j '.token.value' > "$TOKEN_FILE"
   [[ -s $TOKEN_FILE ]] || die "failed to create service token"
 fi
 chown 1000:0 "$TOKEN_FILE"

@@ -37,6 +37,11 @@ issue es01         "es01,localhost,${HOST_NAME}"
 issue kibana       "kibana,localhost,${HOST_NAME}"
 issue fleet-server "fleet-server,localhost,${HOST_NAME}"
 
+# ES must present leaf + CA: agents trust it via the output's ca_trusted_fingerprint,
+# which only matches certificates the server actually sends. Rebuilt every run so
+# existing installs pick it up.
+cat /certs/es01/es01.crt /certs/ca/ca.crt > /certs/es01/es01.chain.crt
+
 # Public copy of the CA cert, served by Caddy for agent enrollment. Never the key.
 cp /certs/ca/ca.crt /certs/public/ca.crt
 

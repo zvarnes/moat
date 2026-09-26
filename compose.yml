@@ -32,7 +32,7 @@ services:
       - xpack.security.enabled=true
       - xpack.security.http.ssl.enabled=true
       - xpack.security.http.ssl.key=certs/es01/es01.key
-      - xpack.security.http.ssl.certificate=certs/es01/es01.crt
+      - xpack.security.http.ssl.certificate=certs/es01/es01.chain.crt
       - xpack.security.http.ssl.certificate_authorities=certs/ca/ca.crt
       - xpack.security.transport.ssl.enabled=false
       - xpack.ml.enabled=false
@@ -120,6 +120,12 @@ services:
       - "${BIND_IP}:${FLEET_PORT}:8220"
     networks: [soc]
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf --cacert /certs/ca/ca.crt https://localhost:8220/api/status | grep -q HEALTHY"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
 
   caddy:
     image: caddy:${CADDY_VERSION}
