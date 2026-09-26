@@ -1,0 +1,149 @@
+name: socinabox
+
+x-setup: &setup
+  build: ./setup
+  image: socinabox-setup:local
+  env_file: .env
+  networks: [soc]
+  restart: "no"
+
+services:
+  # 1. Local CA, service certs, rendered kibana.yml
+  certs:
+    <<: *setup
+    command: /setup/certs.sh
+    user: "0"
+    volumes:
+      - certs:/certs
+      - kibana-config:/config
+
+  es01:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    depends_on:
+      certs: { condition: service_completed_successfully }
+    environment:
+      - node.name=es01
+      - cluster.name=socinabox
+      - discovery.type=single-node
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - bootstrap.memory_lock=true
+      - ES_JAVA_OPTS=-Xms${ES_HEAP} -Xmx${ES_HEAP}
+      - xpack.license.self_generated.type=basic
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=true
+      - xpack.security.http.ssl.key=certs/es01/es01.key
+      - xpack.security.http.ssl.certificate=certs/es01/es01.crt
+      - xpack.security.http.ssl.certificate_authorities=certs/ca/ca.crt
+      - xpack.security.transport.ssl.enabled=false
+      - xpack.ml.enabled=false
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    mem_limit: ${ES_MEM_LIMIT}
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs:ro
+      - esdata:/usr/share/elasticsearch/data
+    ports:
+      - "${BIND_IP}:${ES_PORT}:9200"
+    networks: [soc]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf --cacert config/certs/ca/ca.crt -u elastic:$${ELASTIC_PASSWORD} https://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 10s
+      timeout: 10s
+      retries: 60
+
+  # 2. Built-in passwords + Fleet Server service token
+  setup:
+    <<: *setup
+    command: /setup/setup.sh
+    user: "0"
+    depends_on:
+      es01: { condition: service_healthy }
+    volumes:
+      - certs:/certs:ro
+      - tokens:/tokens
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+    depends_on:
+      setup: { condition: service_completed_successfully }
+    environment:
+      - KIBANA_SYSTEM_PASSWORD=${KIBANA_SYSTEM_PASSWORD}
+      - KIBANA_ENCRYPTION_KEY=${KIBANA_ENCRYPTION_KEY}
+      - KIBANA_SECURITY_KEY=${KIBANA_SECURITY_KEY}
+      - KIBANA_REPORTING_KEY=${KIBANA_REPORTING_KEY}
+    mem_limit: ${KIBANA_MEM_LIMIT}
+    volumes:
+      - certs:/certs:ro
+      - kibana-config:/usr/share/kibana/config/socinabox:ro
+      - kibanadata:/usr/share/kibana/data
+    command: ["/usr/local/bin/kibana-docker", "--config", "/usr/share/kibana/config/socinabox/kibana.yml"]
+    networks: [soc]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf --cacert /certs/ca/ca.crt https://localhost:5601/api/status -o /dev/null -w '%{http_code}' | grep -qE '^(200|401)$'"]
+      interval: 10s
+      timeout: 10s
+      retries: 90
+
+  # 3. Fleet setup, Elastic Defend, analyst user, detection rules
+  bootstrap:
+    <<: *setup
+    command: /setup/bootstrap.sh
+    depends_on:
+      kibana: { condition: service_healthy }
+    volumes:
+      - certs:/certs:ro
+
+  fleet-server:
+    image: docker.elastic.co/elastic-agent/elastic-agent:${STACK_VERSION}
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+    user: "1000"
+    environment:
+      - FLEET_SERVER_ENABLE=1
+      - FLEET_SERVER_ELASTICSEARCH_HOST=https://es01:9200
+      - FLEET_SERVER_ELASTICSEARCH_CA=/certs/ca/ca.crt
+      - FLEET_SERVER_SERVICE_TOKEN_PATH=/tokens/fleet-server.token
+      - FLEET_SERVER_POLICY_ID=fleet-server-policy
+      - FLEET_SERVER_CERT=/certs/fleet-server/fleet-server.crt
+      - FLEET_SERVER_CERT_KEY=/certs/fleet-server/fleet-server.key
+      - FLEET_URL=https://fleet-server:8220
+      - FLEET_CA=/certs/ca/ca.crt
+    mem_limit: ${FLEET_MEM_LIMIT}
+    volumes:
+      - certs:/certs:ro
+      - tokens:/tokens:ro
+      - fleetdata:/usr/share/elastic-agent/state
+    ports:
+      - "${BIND_IP}:${FLEET_PORT}:8220"
+    networks: [soc]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:${CADDY_VERSION}
+    depends_on:
+      kibana: { condition: service_healthy }
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Only the Kibana cert and the public CA cert; never the CA key.
+      - { type: volume, source: certs, target: /certs/kibana, read_only: true, volume: { subpath: kibana } }
+      - { type: volume, source: certs, target: /certs/public, read_only: true, volume: { subpath: public } }
+      - caddydata:/data
+    ports:
+      - "${BIND_IP}:${KIBANA_PORT}:443"
+    networks: [soc]
+    restart: unless-stopped
+
+networks:
+  soc:
+
+volumes:
+  certs:
+  tokens:
+  kibana-config:
+  esdata:
+  kibanadata:
+  fleetdata:
+  caddydata:

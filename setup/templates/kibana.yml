@@ -1,0 +1,75 @@
+# Rendered by setup/scripts/certs.sh. ${VAR} secrets are resolved by Kibana from its environment.
+server.host: "0.0.0.0"
+server.name: socinabox
+server.shutdownTimeout: "5s"
+server.publicBaseUrl: "${PUBLIC_URL}"
+server.ssl.enabled: true
+server.ssl.certificate: /certs/kibana/kibana.crt
+server.ssl.key: /certs/kibana/kibana.key
+
+elasticsearch.hosts: ["https://es01:9200"]
+elasticsearch.username: kibana_system
+elasticsearch.password: "${KIBANA_SYSTEM_PASSWORD}"
+elasticsearch.ssl.certificateAuthorities: ["/certs/ca/ca.crt"]
+
+xpack.encryptedSavedObjects.encryptionKey: "${KIBANA_ENCRYPTION_KEY}"
+xpack.security.encryptionKey: "${KIBANA_SECURITY_KEY}"
+xpack.reporting.encryptionKey: "${KIBANA_REPORTING_KEY}"
+
+telemetry.optIn: false
+telemetry.allowChangingOptInStatus: false
+
+# ---- Fleet, declared as code ----
+xpack.fleet.fleetServerHosts:
+  - id: socinabox-fleet
+    name: socinabox Fleet Server
+    is_default: true
+    host_urls: ["https://${HOST_IP}:${FLEET_PORT}"]
+
+xpack.fleet.outputs:
+  # What enrolled endpoints use: the host's LAN address.
+  - id: socinabox-es
+    name: socinabox Elasticsearch
+    type: elasticsearch
+    is_default: true
+    is_default_monitoring: true
+    hosts: ["https://${HOST_IP}:${ES_PORT}"]
+    ca_trusted_fingerprint: "${CA_FINGERPRINT}"
+  # What agents inside the compose network use (Fleet Server, sensor agent).
+  - id: socinabox-es-internal
+    name: socinabox Elasticsearch (internal)
+    type: elasticsearch
+    hosts: ["https://es01:9200"]
+    ca_trusted_fingerprint: "${CA_FINGERPRINT}"
+
+xpack.fleet.packages:
+  - name: fleet_server
+    version: latest
+  - name: elastic_agent
+    version: latest
+  - name: system
+    version: latest
+  - name: endpoint
+    version: latest
+
+xpack.fleet.agentPolicies:
+  - name: Fleet Server
+    id: fleet-server-policy
+    namespace: default
+    is_default_fleet_server: true
+    data_output_id: socinabox-es-internal
+    monitoring_output_id: socinabox-es-internal
+    package_policies:
+      - name: fleet-server
+        id: fleet-server-integration
+        package:
+          name: fleet_server
+  - name: Endpoints
+    id: socinabox-endpoints
+    namespace: default
+    description: Laptops, desktops and servers. Elastic Defend is added by bootstrap.
+    package_policies:
+      - name: system-endpoints
+        id: system-endpoints
+        package:
+          name: system

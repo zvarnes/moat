@@ -1,0 +1,85 @@
+# Mirroring traffic from UniFi to the socinabox sensor NIC
+
+Goal: copy the traffic on your busiest LAN link to a port that feeds the socinabox sensor NIC (your USB-C Ethernet adapter), so Zeek and Suricata see it.
+
+```
+             Internet
+                │
+           ┌────┴─────┐
+           │ UDM Pro  │  port A ── uplink to main switch / APs  (mirror SOURCE)
+           │          │  port B ── socinabox USB NIC            (mirror DESTINATION)
+           └──────────┘
+   socinabox built-in NIC ── any normal LAN port (management + agent traffic)
+```
+
+## 1. Pick the source port
+
+Mirror the port that carries the most client traffic to the gateway, usually the UDM Pro's uplink to your main switch. Because the mirror sits on the LAN side of the gateway, you see real internal IPs before NAT, which is what you want for hunting.
+
+What you will **not** see:
+
+- Traffic between two devices on the same downstream switch (it never reaches the uplink). Mirror that switch's uplink instead, or add a second mirror later.
+- WAN-side traffic: UDM Pro WAN/SFP ports generally can't be mirrored. You don't need them.
+
+Inter-VLAN traffic that is routed by the UDM Pro *does* cross the uplink, so it's visible. Mirrored frames keep their 802.1Q VLAN tags; Zeek and Suricata handle tagged traffic.
+
+## 2. Configure the mirror in UniFi Network
+
+Menu names shift between Network app versions; this is the general path.
+
+1. **UniFi Devices** → select the UDM Pro (or the UniFi switch that owns the ports).
+2. **Port Manager** → select the **destination** port (where the USB NIC's cable plugs in).
+3. Set **Operation / Port Profile** to **Mirroring**, and choose the **source** port from step 1.
+4. Apply. The destination port no longer passes normal traffic; it only transmits copies.
+
+Plug the USB-C Ethernet adapter into that destination port.
+
+## 3. Prepare the sensor NIC on the laptop
+
+Find the adapter name (usually `enx<mac>` for USB NICs):
+
+```bash
+./socinabox preflight          # lists NICs; the USB one shows bus "usb"
+```
+
+Make sure NetworkManager / netplan won't put an IP on it. On Ubuntu Desktop:
+
+```bash
+nmcli device set enx001122334455 managed no
+```
+
+On Ubuntu Server (netplan), add to `/etc/netplan/99-socinabox.yaml` and `sudo netplan apply`:
+
+```yaml
+network:
+  version: 2
+  ethernets:
+    enx001122334455:
+      dhcp4: false
+      dhcp6: false
+      link-local: []
+      optional: true
+```
+
+Put it in capture mode now and on every boot:
+
+```bash
+sudo apt install -y ethtool tcpdump
+sudo ./socinabox sensor-prep enx001122334455
+sudo cp sensors/socinabox-sensor-nic@.service /etc/systemd/system/
+sudo systemctl enable --now socinabox-sensor-nic@enx001122334455.service
+```
+
+## 4. Verify you're seeing mirrored traffic
+
+```bash
+sudo timeout 15 tcpdump -ni enx001122334455 -c 50 not arp
+```
+
+You should see DNS, TLS, and other traffic from devices **other than the laptop**. Quick checks:
+
+- Only broadcast/multicast (mDNS, SSDP) → the mirror isn't active or the source port is wrong.
+- Nothing at all → cable/port, or the interface isn't `up` (`ip link show enx…`).
+- Drops under load → `ethtool -S enx… | grep -i drop`. Most USB 1 GbE adapters are fine at home traffic levels.
+
+Record the interface in `.env` as `SENSOR_IFACE=` so Phase 2 (Zeek + Suricata) picks it up.

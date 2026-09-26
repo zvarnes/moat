@@ -1,0 +1,17 @@
+# Puts a mirrored-traffic NIC into capture mode at boot.
+# Install:  sudo cp sensors/socinabox-sensor-nic@.service /etc/systemd/system/
+#           sudo systemctl enable --now socinabox-sensor-nic@<iface>.service
+[Unit]
+Description=socinabox sensor NIC capture mode on %i
+After=network-pre.target sys-subsystem-net-devices-%i.device
+BindsTo=sys-subsystem-net-devices-%i.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ip link set dev %i up promisc on arp off multicast off
+ExecStart=-/usr/sbin/ethtool -K %i gro off lro off gso off tso off rx-gro-hw off
+ExecStop=/usr/sbin/ip link set dev %i promisc off
+
+[Install]
+WantedBy=multi-user.target sys-subsystem-net-devices-%i.device

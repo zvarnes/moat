@@ -1,0 +1,319 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2153  # HOST_IP etc. come from .env via load_env
+# socinabox — stand up a home SOC (Elastic SIEM + Fleet + Defend, Zeek/Suricata later) on one box.
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+cd "$ROOT"
+ENV_FILE="$ROOT/.env"
+MIN_MAP_COUNT=262144
+
+if [[ -t 1 ]]; then B=$'\e[1m'; G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; N=$'\e[0m'; else B=''; G=''; Y=''; R=''; N=''; fi
+ok()   { printf '  %s✔%s %s\n' "$G" "$N" "$*"; }
+warn() { printf '  %s!%s %s\n' "$Y" "$N" "$*"; }
+bad()  { printf '  %s✘%s %s\n' "$R" "$N" "$*"; }
+die()  { printf '%sError:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
+hdr()  { printf '\n%s%s%s\n' "$B" "$*" "$N"; }
+
+compose() { docker compose --env-file "$ENV_FILE" "$@"; }
+load_env() {
+  [[ -f $ENV_FILE ]] || die "no .env yet — run ./socinabox init first"
+  set -a; # shellcheck disable=SC1090
+  source "$ENV_FILE"; set +a
+}
+# Run curl inside the Kibana container against Kibana's API as elastic.
+kb() {
+  local method=$1 path=$2 body=${3:-}
+  local args=(-sS --fail-with-body --cacert /certs/ca/ca.crt -u "elastic:${ELASTIC_PASSWORD}" -X "$method"
+              -H 'Content-Type: application/json' -H 'kbn-xsrf: socinabox' "https://localhost:5601${path}")
+  [[ -n $body ]] && args+=(-d "$body")
+  compose exec -T kibana curl "${args[@]}"
+}
+es() {
+  local method=$1 path=$2 body=${3:-}
+  local args=(-sS --fail-with-body --cacert config/certs/ca/ca.crt -u "elastic:${ELASTIC_PASSWORD}" -X "$method"
+              -H 'Content-Type: application/json' "https://localhost:9200${path}")
+  [[ -n $body ]] && args+=(-d "$body")
+  compose exec -T es01 curl "${args[@]}"
+}
+# jq from the setup image, so the host needs no extra packages.
+jqc() { docker run --rm -i --entrypoint jq socinabox-setup:local "$@"; }
+rand() { tr -dc 'A-Za-z0-9' </dev/urandom | head -c "${1:-32}" || true; }
+default_ip() { ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src"){print $(i+1); exit}}'; }
+
+# ---------------------------------------------------------------- preflight
+cmd_preflight() {
+  local fail=0
+  hdr "Host"
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    case "$ID" in ubuntu|debian) ok "$PRETTY_NAME";; *) warn "$PRETTY_NAME (tested on Ubuntu 24.04 / Debian 12)";; esac
+  fi
+  local mem_gb; mem_gb=$(awk '/MemTotal/{printf "%d", $2/1024/1024 + 0.5}' /proc/meminfo)
+  if   (( mem_gb >= 15 )); then ok "RAM ${mem_gb} GB (standard profile)"
+  elif (( mem_gb >= 7 ));  then warn "RAM ${mem_gb} GB — use the lite profile"
+  else bad "RAM ${mem_gb} GB — need at least 8 GB"; fail=1; fi
+  ok "CPU cores: $(nproc)"
+
+  hdr "Docker"
+  if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+    ok "docker $(docker version -f '{{.Server.Version}}')"
+    local droot; droot=$(docker info -f '{{.DockerRootDir}}')
+    local free_gb; free_gb=$(df -BG --output=avail "$droot" | tail -1 | tr -dc 0-9)
+    if (( free_gb >= 100 )); then ok "disk free at ${droot}: ${free_gb} GB"
+    elif (( free_gb >= 40 )); then warn "disk free at ${droot}: ${free_gb} GB (100+ GB recommended)"
+    else bad "disk free at ${droot}: ${free_gb} GB — need 40+ GB"; fail=1; fi
+  else
+    bad "docker not installed or not usable by $(id -un) — see docs/laptop-test.md"; fail=1
+  fi
+  if docker compose version >/dev/null 2>&1; then ok "$(docker compose version)"
+  else bad "docker compose v2 plugin missing"; fail=1; fi
+
+  hdr "Kernel"
+  local mmc; mmc=$(sysctl -n vm.max_map_count)
+  if (( mmc >= MIN_MAP_COUNT )); then ok "vm.max_map_count=$mmc"
+  else
+    bad "vm.max_map_count=$mmc (need $MIN_MAP_COUNT). Fix:"
+    echo "      echo 'vm.max_map_count=$MIN_MAP_COUNT' | sudo tee /etc/sysctl.d/99-socinabox.conf && sudo sysctl --system"
+    fail=1
+  fi
+
+  hdr "Ports"
+  for p in 443 8220 9200; do
+    if ss -Hltn "sport = :$p" 2>/dev/null | grep -q .; then
+      if docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep -q "socinabox.*:$p->"; then ok "$p in use by socinabox"
+      else bad "port $p already in use"; fail=1; fi
+    else ok "port $p free"; fi
+  done
+
+  hdr "Network interfaces"
+  local def_if; def_if=$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')
+  for d in /sys/class/net/*; do
+    local n; n=$(basename "$d")
+    [[ $n == lo || $n == docker* || $n == br-* || $n == veth* ]] && continue
+    local state; state=$(cat "$d/operstate" 2>/dev/null || echo "?")
+    local addr; addr=$(ip -4 -o addr show dev "$n" 2>/dev/null | awk '{print $4}' | head -1)
+    local bus=""; [[ -e $d/device ]] && bus=$(basename "$(readlink -f "$d/device/subsystem" 2>/dev/null)" 2>/dev/null || true)
+    local role=""
+    [[ $n == "$def_if" ]] && role=" ← management (default route)"
+    [[ -n ${SENSOR_IFACE:-} && $n == "$SENSOR_IFACE" ]] && role=" ← sensor"
+    printf '    %-16s %-6s %-18s %-5s%s\n' "$n" "$state" "${addr:--}" "$bus" "$role"
+  done
+  echo "    (a USB NIC with no IP and link 'up' is a good sensor candidate)"
+
+  if compgen -G '/sys/class/power_supply/BAT*' >/dev/null; then
+    hdr "Laptop"
+    local lid; lid=$(grep -hE '^\s*HandleLidSwitch(ExternalPower)?=' /etc/systemd/logind.conf /etc/systemd/logind.conf.d/*.conf 2>/dev/null | tail -1 || true)
+    if [[ $lid == *ignore* ]]; then ok "lid close ignored ($lid)"
+    else warn "closing the lid will suspend the SOC — see docs/laptop-test.md"; fi
+  fi
+
+  echo
+  if (( fail == 0 )); then printf '%sPreflight passed.%s\n' "$G" "$N"
+  else printf '%sPreflight found blocking issues.%s\n' "$R" "$N"; return 1; fi
+}
+
+# ---------------------------------------------------------------- init
+cmd_init() {
+  local profile="" host_ip="" host_name="" sensor="" yes=0 force=0
+  while (( $# )); do
+    case $1 in
+      --profile) profile=$2; shift 2;;
+      --host-ip) host_ip=$2; shift 2;;
+      --host-name) host_name=$2; shift 2;;
+      --sensor-iface) sensor=$2; shift 2;;
+      -y|--yes) yes=1; shift;;
+      --force) force=1; shift;;
+      *) die "unknown init option: $1";;
+    esac
+  done
+  if [[ -f $ENV_FILE && $force -eq 0 ]]; then
+    die ".env already exists (it holds your passwords). Use --force to regenerate, which requires './socinabox destroy' first."
+  fi
+
+  local mem_gb; mem_gb=$(awk '/MemTotal/{printf "%d", $2/1024/1024 + 0.5}' /proc/meminfo)
+  local def_profile=standard; (( mem_gb < 15 )) && def_profile=lite
+  local def_ip; def_ip=$(default_ip || true)
+
+  ask() { # ask VAR PROMPT DEFAULT
+    local __v=$1 prompt=$2 def=$3 ans
+    if (( yes )) || [[ -n ${!__v} ]]; then [[ -z ${!__v} ]] && printf -v "$__v" "%s" "$def"; return 0; fi
+    read -rp "  $prompt [$def]: " ans; printf -v "$__v" '%s' "${ans:-$def}"
+  }
+  hdr "socinabox init"
+  ask profile   "Profile (standard|lite)" "$def_profile"
+  ask host_ip   "LAN IP endpoints will use to reach this box" "${def_ip:-192.168.1.50}"
+  ask host_name "Hostname for certificates" "socinabox.local"
+  ask sensor    "Sensor interface for mirrored traffic (blank = none yet)" ""
+  [[ $profile == standard || $profile == lite ]] || die "profile must be standard or lite"
+  [[ $host_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid IP: $host_ip"
+
+  local heap limit kmem fmem
+  if [[ $profile == lite ]]; then heap=2g; limit=3g; kmem=1g; fmem=512m
+  else heap=4g; limit=6g; kmem=1536m; fmem=768m; fi
+
+  sed -e "s|^PROFILE=.*|PROFILE=$profile|" \
+      -e "s|^HOST_IP=.*|HOST_IP=$host_ip|" \
+      -e "s|^BIND_IP=.*|BIND_IP=$host_ip|" \
+      -e "s|^HOST_NAME=.*|HOST_NAME=$host_name|" \
+      -e "s|^SENSOR_IFACE=.*|SENSOR_IFACE=$sensor|" \
+      -e "s|^ES_HEAP=.*|ES_HEAP=$heap|" \
+      -e "s|^ES_MEM_LIMIT=.*|ES_MEM_LIMIT=$limit|" \
+      -e "s|^KIBANA_MEM_LIMIT=.*|KIBANA_MEM_LIMIT=$kmem|" \
+      -e "s|^FLEET_MEM_LIMIT=.*|FLEET_MEM_LIMIT=$fmem|" \
+      -e "s|^ELASTIC_PASSWORD=.*|ELASTIC_PASSWORD=$(rand 24)|" \
+      -e "s|^KIBANA_SYSTEM_PASSWORD=.*|KIBANA_SYSTEM_PASSWORD=$(rand 24)|" \
+      -e "s|^ANALYST_PASSWORD=.*|ANALYST_PASSWORD=$(rand 20)|" \
+      -e "s|^KIBANA_ENCRYPTION_KEY=.*|KIBANA_ENCRYPTION_KEY=$(rand 32)|" \
+      -e "s|^KIBANA_SECURITY_KEY=.*|KIBANA_SECURITY_KEY=$(rand 32)|" \
+      -e "s|^KIBANA_REPORTING_KEY=.*|KIBANA_REPORTING_KEY=$(rand 32)|" \
+      .env.example > "$ENV_FILE.tmp"
+  chmod 600 "$ENV_FILE.tmp"; mv "$ENV_FILE.tmp" "$ENV_FILE"
+  ok "wrote .env (mode 600) — profile=$profile host=$host_ip"
+  echo "  Next: ./socinabox up"
+}
+
+# ---------------------------------------------------------------- lifecycle
+cmd_up() {
+  load_env
+  hdr "Starting socinabox (first run pulls ~3 GB of images and takes 5–10 minutes)"
+  compose up -d --build --wait --wait-timeout 1200 es01 kibana caddy
+  compose up -d fleet-server  # waits on bootstrap (Fleet, Defend, rules)
+  local rc; rc=$(compose ps -a bootstrap --format '{{.ExitCode}}' 2>/dev/null || echo "?")
+  [[ $rc == 0 ]] || { compose logs bootstrap | tail -20; die "bootstrap failed (exit $rc) — fix and run ./socinabox bootstrap"; }
+  echo
+  printf '%sReady.%s Kibana: https://%s%s\n' "$G" "$N" "$HOST_IP" "$([[ $KIBANA_PORT == 443 ]] || echo ":$KIBANA_PORT")"
+  echo "  Log in as 'analyst' (password: ./socinabox creds). Browser will warn about the local CA — see docs."
+  echo "  Enroll endpoints: ./socinabox enroll"
+}
+cmd_down()      { load_env; compose down; }
+cmd_logs()      { load_env; compose logs -f --tail=100 "$@"; }
+cmd_bootstrap() { load_env; compose run --rm bootstrap /setup/bootstrap.sh; }
+cmd_destroy() {
+  load_env
+  read -rp "This deletes ALL socinabox data, certs and enrolled-agent trust. Type 'destroy' to confirm: " a
+  [[ $a == destroy ]] || die "aborted"
+  compose down -v --remove-orphans
+  ok "stack and volumes removed (.env kept; delete it and re-run init for new secrets)"
+}
+cmd_creds() {
+  load_env
+  echo "Kibana:   https://$HOST_IP$([[ $KIBANA_PORT == 443 ]] || echo ":$KIBANA_PORT")"
+  echo "analyst:  $ANALYST_PASSWORD   (daily use)"
+  echo "elastic:  $ELASTIC_PASSWORD   (superuser — admin tasks only)"
+}
+
+# ---------------------------------------------------------------- status
+cmd_status() {
+  load_env
+  hdr "Services"
+  compose ps -a --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
+  if ! compose exec -T es01 true 2>/dev/null; then warn "es01 not running"; return; fi
+  hdr "Elasticsearch"
+  es GET /_cluster/health | jqc -r '"  cluster status: \(.status), \(.active_shards) shards, \(.unassigned_shards) unassigned"'
+  hdr "Fleet agents"
+  kb GET '/api/fleet/agents?perPage=100&showInactive=false' 2>/dev/null \
+    | jqc -r '.items[] | "  \(.local_metadata.host.hostname // "?")\t\(.status)\t\(.policy_id)\tlast seen \(.last_checkin // "never")"' \
+    || warn "Kibana not ready"
+  hdr "Events in the last 15 minutes"
+  for pat in 'logs-*' 'metrics-*' '.alerts-security.alerts-*'; do
+    local c; c=$(es POST "/${pat}/_count?ignore_unavailable=true&allow_no_indices=true" \
+      '{"query":{"range":{"@timestamp":{"gte":"now-15m"}}}}' 2>/dev/null | jqc -r .count)
+    printf '  %-28s %s\n' "$pat" "${c:-?}"
+  done
+}
+
+# ---------------------------------------------------------------- enroll
+cmd_enroll() {
+  load_env
+  local key
+  key=$(kb GET '/api/fleet/enrollment_api_keys?perPage=100' \
+        | jqc -r '[.items[] | select(.policy_id=="socinabox-endpoints" and .active)][0].api_key // empty')
+  [[ -n $key ]] || die "no enrollment token for the Endpoints policy yet — is bootstrap finished?"
+  local fp; fp=$(compose exec -T caddy cat /certs/public/ca.sha256 | tr -d '\r\n')
+  local v=$STACK_VERSION fleet="https://$HOST_IP:$FLEET_PORT" base="https://$HOST_IP"
+  [[ $KIBANA_PORT == 443 ]] || base+=":$KIBANA_PORT"
+  cat <<EOF
+${B}Enroll an endpoint into socinabox${N}  (policy: Endpoints — System + Elastic Defend)
+CA fingerprint (sha256): $fp
+
+${B}Linux (x86_64), as root:${N}
+  curl -sk $base/socinabox-ca.crt -o /etc/socinabox-ca.crt
+  openssl x509 -in /etc/socinabox-ca.crt -noout -fingerprint -sha256 | tr -d : | grep -qi $fp && echo CA OK
+  curl -LO https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-$v-linux-x86_64.tar.gz
+  tar xzf elastic-agent-$v-linux-x86_64.tar.gz && cd elastic-agent-$v-linux-x86_64
+  ./elastic-agent install --non-interactive --url=$fleet --enrollment-token=$key --certificate-authorities=/etc/socinabox-ca.crt
+
+${B}Windows, in an elevated PowerShell:${N}
+  \$ca="C:\\ProgramData\\socinabox-ca.crt"
+  [Net.ServicePointManager]::ServerCertificateValidationCallback={\$true}; (New-Object Net.WebClient).DownloadFile("$base/socinabox-ca.crt",\$ca)
+  (Get-FileHash -Algorithm SHA256 -InputStream ([IO.MemoryStream]::new([Security.Cryptography.X509Certificates.X509Certificate2]::new(\$ca).RawData))).Hash  # should equal $fp
+  \$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-$v-windows-x86_64.zip -OutFile agent.zip
+  Expand-Archive agent.zip -DestinationPath .; cd elastic-agent-$v-windows-x86_64
+  .\\elastic-agent.exe install --non-interactive --url=$fleet --enrollment-token=$key --certificate-authorities=\$ca
+
+${B}macOS (Apple silicon), as root:${N}
+  curl -sk $base/socinabox-ca.crt -o /Library/Application\\ Support/socinabox-ca.crt
+  curl -LO https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-$v-darwin-aarch64.tar.gz
+  tar xzf elastic-agent-$v-darwin-aarch64.tar.gz && cd elastic-agent-$v-darwin-aarch64
+  ./elastic-agent install --non-interactive --url=$fleet --enrollment-token=$key --certificate-authorities="/Library/Application Support/socinabox-ca.crt"
+  (macOS needs Full Disk Access + system extension approval for Elastic Defend — see Elastic docs.)
+EOF
+}
+
+# ---------------------------------------------------------------- sensor NIC (Phase 2 prep)
+cmd_sensor_prep() {
+  local ifc=${1:-}; [[ -n $ifc ]] || { load_env; ifc=${SENSOR_IFACE:-}; }
+  [[ -n $ifc && -e /sys/class/net/$ifc ]] || die "usage: ./socinabox sensor-prep <iface>"
+  [[ $EUID -eq 0 ]] || die "run with sudo"
+  if ip -4 -o addr show dev "$ifc" | grep -q inet; then
+    warn "$ifc has an IP address; a sensor NIC should not. Remove it from netplan/NetworkManager."
+  fi
+  ip link set dev "$ifc" up promisc on arp off multicast off
+  if command -v ethtool >/dev/null; then
+    for f in gro lro gso tso rx-gro-hw; do ethtool -K "$ifc" "$f" off 2>/dev/null || true; done
+    ok "offloads disabled on $ifc"
+  else warn "install ethtool to disable NIC offloads (apt install ethtool)"; fi
+  ok "$ifc is up, promiscuous, no ARP"
+  echo "  Verify mirrored traffic:  sudo timeout 10 tcpdump -ni $ifc -c 20 not arp"
+  echo "  Persist across reboots:   see docs/sensors/unifi-port-mirror.md (systemd unit)"
+}
+
+usage() {
+  cat <<EOF
+${B}socinabox${N} — home SOC in a box
+
+  preflight            Check host readiness (RAM, disk, Docker, kernel, ports, NICs)
+  init [opts]          Generate .env with secrets   (--profile lite|standard --host-ip IP --sensor-iface IF -y)
+  up                   Build and start the stack, bootstrap Fleet + Defend + rules
+  status               Service health, agents, events/min, alerts
+  enroll               Print endpoint install commands with the enrollment token
+  creds                Show Kibana URL and passwords
+  logs [service]       Follow logs
+  bootstrap            Re-run Fleet/Defend/rules bootstrap
+  sensor-prep [iface]  Put the sensor NIC in capture mode (sudo)
+  down                 Stop the stack (keeps data)
+  destroy              Stop and delete all data + certs
+EOF
+}
+
+main() {
+  local c=${1:-help}; shift || true
+  case $c in
+    preflight) cmd_preflight "$@";;
+    init) cmd_init "$@";;
+    up) cmd_up;;
+    down) cmd_down;;
+    status) cmd_status;;
+    enroll) cmd_enroll;;
+    creds) cmd_creds;;
+    logs) cmd_logs "$@";;
+    bootstrap) cmd_bootstrap;;
+    sensor-prep) cmd_sensor_prep "$@";;
+    destroy) cmd_destroy;;
+    help|-h|--help) usage;;
+    *) usage; exit 1;;
+  esac
+}
+main "$@"

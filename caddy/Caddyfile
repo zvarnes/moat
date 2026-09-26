@@ -1,0 +1,36 @@
+{
+	auto_https off
+	admin off
+}
+
+:443 {
+	tls /certs/kibana/kibana.crt /certs/kibana/kibana.key
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	# Public CA cert + fingerprint for agent enrollment (no secrets live here).
+	handle /socinabox-ca.crt {
+		root * /certs/public
+		rewrite * /ca.crt
+		file_server
+	}
+	handle /socinabox-ca.sha256 {
+		root * /certs/public
+		rewrite * /ca.sha256
+		file_server
+	}
+
+	handle {
+		reverse_proxy https://kibana:5601 {
+			transport http {
+				tls_trust_pool file /certs/public/ca.crt
+				tls_server_name kibana
+			}
+		}
+	}
+}
