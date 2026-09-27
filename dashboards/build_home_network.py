@@ -159,13 +159,13 @@ def panels():
                                 [metric("sum", "network.bytes", "Traffic", fmt=BYTES)],
                                 INTERNET, series="bar_horizontal")),
         # row 5: detections
-        ((0, 46, 24, 14), p_table("suri", "Suricata alerts (all severities, 1 = high)", LOGS, [
+        ((0, 46, 24, 14), p_table("suri", "IDS alerts: Suricata high/medium (these raise alerts)", LOGS, [
             terms("rule.name", "Signature", 25, uid("suri", "2")),
             metric("min", "event.severity", "Severity"),
             count("Hits"),
             metric("unique_count", "source.ip", "Sources"),
             metric("max", "@timestamp", "Last seen", dtype="date"),
-        ], 'data_stream.dataset:"suricata.eve" and event.kind:"alert"')),
+        ], 'data_stream.dataset:"suricata.eve" and event.kind:"alert" and event.severity <= 2')),
         ((24, 46, 24, 14), p_table("udm", "UDM firewall blocks and IPS", LOGS, [
             terms("cef.name", "Event", 5, uid("udm", "3")),
             terms("cef.extensions.UNIFIsrcClientAlias", "Device", 10, uid("udm", "3")),
@@ -193,6 +193,13 @@ def panels():
         ((0, 72, 16, 10), p_metric("m_ti", "Threat intel indicators loaded", LOGS, count("Indicators", zero_if_empty=True),
                                    'event.kind:"enrichment" and threat.indicator.type:* '
                                    'and not labels.is_ioc_transform_source:"true"')),
+        # row 8: informational IDS hits (severity 3): hunting context, never alerts
+        ((0, 82, 48, 12), p_table("suri_info", "Informational IDS hits (severity 3, hunting only: no alerts)", LOGS, [
+            terms("rule.name", "Signature", 20, uid("suri_info", "1")),
+            count("Hits"),
+            metric("unique_count", "source.ip", "Devices"),
+            metric("max", "@timestamp", "Last seen", dtype="date"),
+        ], 'data_stream.dataset:"suricata.eve" and event.kind:"alert" and event.severity >= 3')),
         ((16, 72, 32, 10), p_table("ti_hits", "Threat intel matches (device hit a listed indicator)", ALERTS, [
             terms("kibana.alert.rule.name", "Rule", 10, uid("ti_hits", "3")),
             terms("source.ip", "Device", 10, uid("ti_hits", "3"), dtype="ip"),
