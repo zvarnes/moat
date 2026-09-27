@@ -61,8 +61,11 @@ CA_FINGERPRINT=$(openssl x509 -in /certs/ca/ca.crt -noout -fingerprint -sha256 \
 echo "$CA_FINGERPRINT" > /certs/public/ca.sha256
 export CA_FINGERPRINT HOST_IP HOST_NAME
 export FLEET_PORT=${FLEET_PORT:-8220} ES_PORT=${ES_PORT:-9200}
+# The address people use to reach Kibana (links in Kibana, IRIS alerts, ...). Set
+# KIBANA_PUBLIC_URL in .env when that's not the LAN IP, e.g. a Tailscale name.
 PUBLIC_URL="https://${HOST_IP}"
 [[ ${KIBANA_PORT:-443} == 443 ]] || PUBLIC_URL+=":${KIBANA_PORT}"
+[[ -n ${KIBANA_PUBLIC_URL:-} ]] && PUBLIC_URL=${KIBANA_PUBLIC_URL%/}
 export PUBLIC_URL
 
 # shellcheck disable=SC2016  # literal var names for envsubst

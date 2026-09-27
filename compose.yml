@@ -344,8 +344,7 @@ services:
       - BRIDGE_ES_PASSWORD=${BRIDGE_ES_PASSWORD:-}
       - IRIS_URL=http://iris-app:8000
       - IRIS_API_KEY=${IRIS_ADM_API_KEY:-}
-      - KIBANA_PUBLIC_URL=https://${HOST_IP}:${KIBANA_PORT}
-      - IRIS_PUBLIC_URL=https://${HOST_IP}:${IRIS_PORT:-8443}
+      - KIBANA_PUBLIC_URL=${KIBANA_PUBLIC_URL:-https://${HOST_IP}:${KIBANA_PORT}}
       - BRIDGE_MIN_SEVERITY=${BRIDGE_MIN_SEVERITY:-medium}
       - VT_API_KEY=${VT_API_KEY:-}
     mem_limit: 128m
