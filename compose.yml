@@ -97,6 +97,7 @@ services:
       - certs:/certs:ro
       - tokens:/tokens
       - ./rules:/rules:ro
+      - ./dashboards:/dashboards:ro
 
   fleet-server:
     image: docker.elastic.co/elastic-agent/elastic-agent:${STACK_VERSION}

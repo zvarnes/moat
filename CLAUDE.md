@@ -74,6 +74,7 @@ Ports 443 / 8220 / 9200 bind to `BIND_IP` (= HOST_IP). Secrets live only in `.en
   - `moat-unifi-ips`: UDM IDS/IPS via CEF, severity from `UNIFIrisk`.
   - Expected volume ~15 per 2h. The remaining chatter is ET DNS/INFO TLD rules (.to/.life/.world); revisit after a day.
 - `disable.conf`: ethertype-unknown, QUIC errors, STUN, `group:stream-events.rules` (mirror artifacts, ~75% of the noise), and SSDP 2019102 (LAN UPnP discovery to the router).
+- Dashboards as code: edit `dashboards/build_home_network.py`, run it to regenerate `moat-home-network.ndjson`, and bootstrap imports every `dashboards/*.ndjson` with overwrite (UI edits to those objects get replaced, so users should "Save as" to keep their own). Panels are Lens by value, and the ndjson format was copied from Fleet's own Zeek dashboard (dashboard typeMigrationVersion 10.3.0). Verify rendering with a headless browser (Playwright container logging in as `analyst`), because the import API accepts panels that fail to render.
 - Rule pack is JSON (Kibana rule API shape), not the TOML detection-rules format the roadmap mentions. Revisit if `make test-rules` needs TOML.
 - Caddy volume `subpath` needs Docker Engine 26+ / Compose 2.23+.
 
@@ -91,7 +92,7 @@ Ports 443 / 8220 / 9200 bind to `BIND_IP` (= HOST_IP). Secrets live only in `.en
 
 - **Phase 2:** done: Zeek + Suricata + sensor agent, network rule defaults, 7-day ILM.
   - Remaining: endpoint ILM (30d) once endpoints exist, and GB/day measurement.
-- **Phase 3:** moat rule pack in `rules/` (TOML, detection-rules format), dashboards, guided labs with Atomic Red Team and PCAPs, `make test-rules`.
+- **Phase 3:** started: `rules/` (3 rules) and `dashboards/` (moat: Home Network). Still to do: more rules, guided labs with Atomic Red Team and PCAPs, `make test-rules`.
 - **Phase 4:** lite-profile polish, backup/restore, docs site, v1.0.
 
 Plan doc (claude.ai): https://claude.ai/code/artifact/67029afa-f1bc-4508-9d3f-695881a61eae
