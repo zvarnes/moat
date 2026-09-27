@@ -21,3 +21,18 @@ printf 'KB=%s\nKU=%s\nKP=%s\n' "$url" "$user" "$pass" > "$envf"
 docker run --rm --net=host --env-file "$envf" -v "$PWD/tests:/tests:ro" -v "$PWD/tests/out:/out" \
   mcr.microsoft.com/playwright/python:v1.63.0-noble \
   sh -c 'pip install -q --disable-pip-version-check playwright==1.63.0 >/dev/null 2>&1; python /tests/$0' "$script"
+
+# Viewing isn't enough: analysts must be able to change alert status (close/acknowledge).
+# Status changes write to the concrete .internal.alerts-* index, which the role must cover.
+# No-op update (open -> open) so the check never changes data.
+if [[ $user == analyst ]]; then
+  res=$(printf 'user = "analyst:%s"\n' "$pass" | docker compose --env-file .env exec -T kibana \
+    curl -sS --cacert /certs/ca/ca.crt -K - -H kbn-xsrf:moat -H elastic-api-version:2023-10-31 \
+    -H Content-Type:application/json -X POST https://localhost:5601/api/detection_engine/signals/status \
+    -d '{"status":"open","conflicts":"proceed","query":{"term":{"kibana.alert.workflow_status":"open"}}}')
+  if grep -q '"failures":\[\]' <<<"$res" && ! grep -q security_exception <<<"$res"; then
+    echo "ok   alert status update allowed for analyst"
+  else
+    echo "FAIL analyst cannot update alert status: ${res:0:200}"; exit 1
+  fi
+fi

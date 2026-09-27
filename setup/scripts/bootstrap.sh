@@ -183,8 +183,12 @@ kb PUT /api/security/role/moat_analyst "$(jq -n '{
                privileges: ["read", "view_index_metadata"]},
               # manage: required by Security for alert/value-list workflows (the Alerts
               # page shows "Insufficient privileges" without it).
-              {names: [".alerts-security*", ".siem-signals*", ".lists*", ".items*"],
-               privileges: ["write", "maintenance", "manage"]}]
+              # .internal.alerts-*: the concrete index behind the .alerts-security.*
+              # alias. Reads work via the alias, but status changes (close, acknowledge)
+              # are written to the concrete index, so without it analysts cannot close alerts.
+              {names: [".alerts-security*", ".internal.alerts-security*", ".siem-signals*",
+                       ".lists*", ".items*"],
+               privileges: ["read", "write", "maintenance", "manage", "view_index_metadata"]}]
   },
   kibana: [{base: [], spaces: ["*"], feature: {
     siemV5: ["all"], securitySolutionAlertsV1: ["all"], securitySolutionRulesV4: ["all"],
