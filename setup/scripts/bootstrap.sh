@@ -114,6 +114,35 @@ add_sensor_integration udm-cef cef \
   '{"cef-logfile":{"enabled":false},"cef-tcp":{"enabled":false},
     "cef-udp":{"enabled":true,"streams":{"cef.log":{"enabled":true,"vars":{"syslog_host":"0.0.0.0","syslog_port":5514}}}}}'
 
+# UniFi syslog fixes, run by Fleet's cef pipeline as its final @custom hook:
+# - UniFi Network/Protect stamp CEF with console-local time and no zone, so events land
+#   hours off. Network carries the true time in UNIFIutcTime; for events without it
+#   (Protect), use arrival time (live UDP, ~1s). UniFi OS console events are correct.
+# - Protect puts a UUID in the numeric CEF eventId field; the event still parses, so
+#   drop that one error instead of flagging every Protect event as broken.
+if cur=$(es GET /_ingest/pipeline/logs-cef.log@custom 2>/dev/null); then
+  owner=$(jq -r '.["logs-cef.log@custom"]._meta.managed_by // "user"' <<<"$cur")
+else
+  owner=none
+fi
+if [[ $owner == moat || $owner == none ]]; then
+  log "ensuring logs-cef.log@custom (UniFi timestamp fixes)"
+  es PUT /_ingest/pipeline/logs-cef.log@custom '{
+    "description": "moat: UniFi syslog timestamp and Protect eventId fixes",
+    "_meta": {"managed_by": "moat"},
+    "processors": [
+      {"date": {"if": "ctx.cef?.extensions?.UNIFIutcTime != null",
+                "field": "cef.extensions.UNIFIutcTime", "target_field": "@timestamp",
+                "formats": ["ISO8601"], "ignore_failure": true}},
+      {"set": {"if": "ctx.observer?.vendor == \"Ubiquiti\" && ctx.observer?.product != \"UniFi OS\" && ctx.cef?.extensions?.UNIFIutcTime == null",
+               "field": "@timestamp", "value": "{{{_ingest.timestamp}}}"}},
+      {"remove": {"if": "ctx.observer?.vendor == \"Ubiquiti\" && ctx.error?.message instanceof String && ctx.error.message.contains(\"field '"'"'eventId'"'"'\")",
+                  "field": "error.message", "ignore_missing": true}}
+    ]}' >/dev/null
+else
+  log "logs-cef.log@custom was not created by moat, leaving it alone"
+fi
+
 # Enrollment token for the sensor-agent container (only used on its first start).
 tok=$(kb GET "/api/fleet/enrollment_api_keys?perPage=100&kuery=policy_id:moat-sensor" \
   | jq -r '[.items[] | select(.active)][0].api_key // empty')

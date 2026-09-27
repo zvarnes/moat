@@ -13,6 +13,9 @@ moat is a free, single-host home SOC for threat hunting: Elastic Security (SIEM)
 - Phase 2 (network sensing) **runs live** as of 2026-09-27: Zeek + Suricata on the mirror, shipped through the `moat-sensor` agent. There are 0 ingest errors across 16 datasets, and Suricata alerts reach Security alerts via the External Alerts rule.
 - Not yet exercised: enrolling an external endpoint via `./moat enroll`.
 - UDM Pro syslog: the `cef` integration on the Sensor policy listens on UDP 5514 (published on `BIND_IP:${SYSLOG_PORT}`). Verified live 2026-09-27: UniFi OS 5.1.33 sends CEF (`observer.product: UniFi OS`, UniFi fields under `cef.extensions.UNIFI*`) with 0 parse errors. UniFi's syslog setting is a single Mode (internal/external), so it's either/or. Firewall events only arrive for rules with logging enabled.
+  - Network app → CyberSecure → Traffic Logging → Activity Logging (Syslog) = SIEM Server, pointed at the same `:5514`. It's separate from the UniFi OS console's System Logging / SIEM, which only covers OS + Protect.
+  - UniFi Network/Protect stamp CEF with console-local time and no zone (4h off here). Bootstrap's `logs-cef.log@custom` pipeline takes `@timestamp` from `UNIFIutcTime` (Network), uses arrival time for other non-"UniFi OS" Ubiquiti events, and drops Protect's harmless `eventId` UUID parse error.
+  - UDM IPS detections arrive as CEF with `event.kind: event`, so External Alerts does **not** promote them. They need a custom rule (Phase 3).
 - **Next:** measure GB/day after a full day, tune Suricata noise, and check that firewall/threat CEF events parse once some arrive.
 
 ## Architecture (compose.yml, project name `moat`)
