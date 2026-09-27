@@ -56,6 +56,7 @@ Ports 443 / 8220 / 9200 bind to `BIND_IP` (= HOST_IP). Secrets live only in `.en
 - Fleet Server caches its enrollment and token in the `fleetdata` volume. After fixing a token or enrollment problem, remove that volume or the old values stick.
 - ES serves `es01.chain.crt` (leaf + CA). Agents trust ES via `ca_trusted_fingerprint`, which only matches certs the server actually sends.
 - `./moat up` re-renders kibana.yml but does not restart a running Kibana. After template changes, run `docker compose restart kibana`.
+- A few seconds of yellow right after new data streams appear is expected: `auto_expand_replicas` drops the replica asynchronously. Only persistent yellow is a problem.
 - `./moat logs` follows forever. In scripts, use `docker compose --env-file .env logs --no-color <svc>`.
 
 ## Open issues
