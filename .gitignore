@@ -5,3 +5,5 @@
 /backups/
 tests/out/
 __pycache__/
+# Per-install notes for Claude Code (real hostnames/IPs); never committed
+CLAUDE.local.md
