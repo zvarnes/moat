@@ -279,7 +279,7 @@ cmd_up() {
 }
 # sha256 of the rendered kibana.yml in the kibana-config volume ("" before first run).
 kibana_cfg_hash() {
-  docker run --rm -v moat_kibana-config:/c:ro --entrypoint sh moat-setup:local \
+  docker run --rm -v "${COMPOSE_PROJECT_NAME:-moat}_kibana-config:/c:ro" --entrypoint sh moat-setup:local \
     -c 'sha256sum /c/kibana.yml 2>/dev/null | cut -d" " -f1' 2>/dev/null || true
 }
 cmd_down()      { load_env; compose down; }
