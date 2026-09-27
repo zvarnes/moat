@@ -34,3 +34,20 @@
 		}
 	}
 }
+
+# DFIR-IRIS case management (compose profile "iris"). Same moat certificate; the
+# kibana cert's SANs cover HOST_IP. Caddy sets X-Forwarded-Proto, which IRIS trusts
+# (ProxyFix, one hop) for its secure session cookies. WebSockets pass through.
+:8443 {
+	tls /certs/kibana/kibana.crt /certs/kibana/kibana.key
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	reverse_proxy iris-app:8000
+}

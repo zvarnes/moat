@@ -15,9 +15,14 @@ bad()  { printf '  %s✘%s %s\n' "$R" "$N" "$*"; }
 die()  { printf '%sError:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
 hdr()  { printf '\n%s%s%s\n' "$B" "$*" "$N"; }
 
-# The sensor services (Zeek, Suricata, sensor-agent) are in the "sensor" profile,
-# enabled whenever SENSOR_IFACE is set.
-compose() { COMPOSE_PROFILES=${SENSOR_IFACE:+sensor} docker compose --env-file "$ENV_FILE" "$@"; }
+# Optional services live in compose profiles: "sensor" (Zeek, Suricata, sensor-agent)
+# when SENSOR_IFACE is set, "iris" (DFIR-IRIS + bridge) when IRIS_ENABLED=true.
+compose() {
+  local p=()
+  [[ -n ${SENSOR_IFACE:-} ]] && p+=(sensor)
+  [[ ${IRIS_ENABLED:-false} == true ]] && p+=(iris)
+  COMPOSE_PROFILES=$(IFS=,; echo "${p[*]}") docker compose --env-file "$ENV_FILE" "$@"
+}
 load_env() {
   [[ -f $ENV_FILE ]] || die "no .env yet — run ./moat init first"
   set -a; # shellcheck disable=SC1090
@@ -131,8 +136,45 @@ cmd_preflight() {
 }
 
 # ---------------------------------------------------------------- init
+# Every secret in .env and how to generate it. init fills these; init --add-missing
+# fills any that an older .env lacks (e.g. after an upgrade adds a service).
+SECRET_KEYS=(ELASTIC_PASSWORD KIBANA_SYSTEM_PASSWORD ANALYST_PASSWORD KIBANA_ENCRYPTION_KEY
+             KIBANA_SECURITY_KEY KIBANA_REPORTING_KEY IRIS_ADM_PASSWORD IRIS_ADM_API_KEY
+             IRIS_SECRET_KEY IRIS_SECURITY_PASSWORD_SALT IRIS_DB_PASSWORD IRIS_DB_ADMIN_PASSWORD
+             BRIDGE_ES_PASSWORD)
+secret_for() {
+  case $1 in
+    ANALYST_PASSWORD) rand 20;;
+    # IRIS's password policy wants mixed classes; the suffix guarantees them.
+    IRIS_ADM_PASSWORD) printf '%s-Ma7' "$(rand 20)";;
+    IRIS_ADM_API_KEY) rand 64;;
+    IRIS_SECRET_KEY) rand 48;;
+    ELASTIC_PASSWORD|KIBANA_SYSTEM_PASSWORD) rand 24;;
+    *) rand 32;;
+  esac
+}
+
+# Append settings that exist in .env.example but not in .env (new in this version),
+# generating secrets for them. Never changes an existing value.
+init_add_missing() {
+  [[ -f $ENV_FILE ]] || die "no .env yet — run ./moat init first"
+  local line key val added=0
+  while IFS= read -r line; do
+    [[ $line =~ ^([A-Z0-9_]+)= ]] || continue
+    key=${BASH_REMATCH[1]}
+    grep -q "^${key}=" "$ENV_FILE" && continue
+    if [[ " ${SECRET_KEYS[*]} " == *" $key "* ]]; then val=$(secret_for "$key"); else val=${line#*=}; fi
+    (( added++ )) || printf '\n# --- added by ./moat init --add-missing (%s) ---\n' "$(date +%F)" >> "$ENV_FILE"
+    printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE"
+    ok "added $key"
+  done < .env.example
+  chmod 600 "$ENV_FILE"
+  (( added )) || ok ".env already has every setting"
+}
+
 cmd_init() {
   local profile="" host_ip="" host_name="" sensor="" yes=0 force=0
+  [[ ${1:-} == --add-missing ]] && { init_add_missing; return; }
   while (( $# )); do
     case $1 in
       --profile) profile=$2; shift 2;;
@@ -165,9 +207,9 @@ cmd_init() {
   [[ $profile == standard || $profile == lite ]] || die "profile must be standard or lite"
   [[ $host_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid IP: $host_ip"
 
-  local heap limit kmem fmem
-  if [[ $profile == lite ]]; then heap=2g; limit=3g; kmem=1g; fmem=512m
-  else heap=4g; limit=6g; kmem=2g; fmem=768m; fi
+  local heap limit kmem fmem iris
+  if [[ $profile == lite ]]; then heap=2g; limit=3g; kmem=1g; fmem=512m; iris=false
+  else heap=4g; limit=6g; kmem=2g; fmem=768m; iris=true; fi
 
   sed -e "s|^PROFILE=.*|PROFILE=$profile|" \
       -e "s|^HOST_IP=.*|HOST_IP=$host_ip|" \
@@ -178,13 +220,10 @@ cmd_init() {
       -e "s|^ES_MEM_LIMIT=.*|ES_MEM_LIMIT=$limit|" \
       -e "s|^KIBANA_MEM_LIMIT=.*|KIBANA_MEM_LIMIT=$kmem|" \
       -e "s|^FLEET_MEM_LIMIT=.*|FLEET_MEM_LIMIT=$fmem|" \
-      -e "s|^ELASTIC_PASSWORD=.*|ELASTIC_PASSWORD=$(rand 24)|" \
-      -e "s|^KIBANA_SYSTEM_PASSWORD=.*|KIBANA_SYSTEM_PASSWORD=$(rand 24)|" \
-      -e "s|^ANALYST_PASSWORD=.*|ANALYST_PASSWORD=$(rand 20)|" \
-      -e "s|^KIBANA_ENCRYPTION_KEY=.*|KIBANA_ENCRYPTION_KEY=$(rand 32)|" \
-      -e "s|^KIBANA_SECURITY_KEY=.*|KIBANA_SECURITY_KEY=$(rand 32)|" \
-      -e "s|^KIBANA_REPORTING_KEY=.*|KIBANA_REPORTING_KEY=$(rand 32)|" \
+      -e "s|^IRIS_ENABLED=.*|IRIS_ENABLED=$iris|" \
       .env.example > "$ENV_FILE.tmp"
+  local k
+  for k in "${SECRET_KEYS[@]}"; do sed -i "s|^${k}=.*|${k}=$(secret_for "$k")|" "$ENV_FILE.tmp"; done
   chmod 600 "$ENV_FILE.tmp"; mv "$ENV_FILE.tmp" "$ENV_FILE"
   ok "wrote .env (mode 600) — profile=$profile host=$host_ip"
   echo "  Next: ./moat up"
@@ -221,9 +260,17 @@ cmd_up() {
       [[ $st == running ]] || { compose logs --tail 20 "$svc"; die "$svc is not running (${st:-missing})"; }
     done
   fi
+  if [[ ${IRIS_ENABLED:-false} == true ]]; then
+    [[ -n ${IRIS_ADM_API_KEY:-} ]] || die "IRIS settings missing from .env — run: ./moat init --add-missing"
+    hdr "Starting DFIR-IRIS case management (first run pulls images and builds its database)"
+    compose up -d --build --wait --wait-timeout 900 iris-db iris-rabbitmq iris-app \
+      || { compose logs --tail 30 iris-app; die "IRIS did not become healthy"; }
+    compose up -d --build --no-deps iris-worker bridge
+  fi
   echo
   printf '%sReady.%s Kibana: https://%s%s\n' "$G" "$N" "$HOST_IP" "$([[ $KIBANA_PORT == 443 ]] || echo ":$KIBANA_PORT")"
   echo "  Log in as 'analyst' (password: ./moat creds). Browser will warn about the local CA — see docs."
+  [[ ${IRIS_ENABLED:-false} == true ]] && echo "  Case management (DFIR-IRIS): https://$HOST_IP:${IRIS_PORT:-8443}  (./moat creds)"
   echo "  Enroll endpoints: ./moat enroll"
 }
 # sha256 of the rendered kibana.yml in the kibana-config volume ("" before first run).
@@ -238,7 +285,7 @@ cmd_destroy() {
   load_env
   read -rp "This deletes ALL moat data, certs and enrolled-agent trust. Type 'destroy' to confirm: " a
   [[ $a == destroy ]] || die "aborted"
-  COMPOSE_PROFILES=sensor docker compose --env-file "$ENV_FILE" down -v --remove-orphans
+  COMPOSE_PROFILES=sensor,iris docker compose --env-file "$ENV_FILE" down -v --remove-orphans
   ok "stack and volumes removed (.env kept; delete it and re-run init for new secrets)"
 }
 cmd_creds() {
@@ -246,6 +293,11 @@ cmd_creds() {
   echo "Kibana:   https://$HOST_IP$([[ $KIBANA_PORT == 443 ]] || echo ":$KIBANA_PORT")"
   echo "analyst:  $ANALYST_PASSWORD   (daily use)"
   echo "elastic:  $ELASTIC_PASSWORD   (superuser — admin tasks only)"
+  if [[ ${IRIS_ENABLED:-false} == true ]]; then
+    echo
+    echo "IRIS:     https://$HOST_IP:${IRIS_PORT:-8443}"
+    echo "administrator:  $IRIS_ADM_PASSWORD"
+  fi
 }
 
 # ---------------------------------------------------------------- status
@@ -260,6 +312,13 @@ cmd_status() {
   kb GET '/api/fleet/agents?perPage=100&showInactive=false' 2>/dev/null \
     | jqc -r '.items[] | "  \(.local_metadata.host.hostname // "?")\t\(.status)\t\(.policy_id)\tlast seen \(.last_checkin // "never")"' \
     || warn "Kibana not ready"
+  if [[ ${IRIS_ENABLED:-false} == true ]]; then
+    hdr "Case management"
+    local ih; ih=$(compose ps iris-app --format '{{.Health}}' 2>/dev/null || true)
+    if [[ $ih == healthy ]]; then ok "IRIS healthy (https://$HOST_IP:${IRIS_PORT:-8443})"; else warn "IRIS: ${ih:-not running}"; fi
+    local hb; hb=$(compose exec -T bridge cat /state/state.json 2>/dev/null | jqc -r '"\(.heartbeat) (\(.sent|length) alerts forwarded)"' 2>/dev/null || true)
+    if [[ -n $hb ]]; then ok "bridge last poll: $hb"; else warn "bridge: no heartbeat yet (./moat logs bridge)"; fi
+  fi
   hdr "Events in the last 15 minutes"
   for pat in 'logs-*' 'metrics-*' '.alerts-security.alerts-*'; do
     local c; c=$(es POST "/${pat}/_count?ignore_unavailable=true&allow_no_indices=true" \
@@ -377,6 +436,7 @@ ${B}moat${N} — a home SOC for threat hunting
 
   preflight            Check host readiness (RAM, disk, Docker, kernel, ports, NICs)
   init [opts]          Generate .env with secrets   (--profile lite|standard --host-ip IP --sensor-iface IF -y)
+  init --add-missing   Add settings/secrets new in this version to an existing .env
   up                   Build and start the stack, bootstrap Fleet + Defend + rules
   status               Service health, agents, events/min, alerts
   enroll               Print endpoint install commands with the enrollment token

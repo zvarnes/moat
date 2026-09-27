@@ -20,7 +20,7 @@ jobs:
       - name: moat rules are valid JSON with a rule_id
         run: for f in rules/*.json; do jq -e '.rule_id and .name and .type' "$f" > /dev/null || { echo "bad: $f"; exit 1; }; done
       - name: python compiles
-        run: python3 -m py_compile dashboards/*.py tests/*.py setup/scripts/*.py
+        run: python3 -m py_compile dashboards/*.py tests/*.py setup/scripts/*.py bridge/*.py
       - name: dashboard ndjson matches its generator
         run: |
           python3 dashboards/build_home_network.py

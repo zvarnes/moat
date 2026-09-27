@@ -179,6 +179,16 @@ kb PUT /api/security/role/moat_analyst "$(jq -n '{
 es POST /_security/user/analyst "$(jq -n --arg p "$ANALYST_PASSWORD" '{
   password: $p, roles: ["moat_analyst"], full_name: "moat analyst"}')" >/dev/null
 
+# --- moat_bridge: read-only ES user for the IRIS bridge (profile "iris") ---
+# Reads open alerts and DHCP hostnames (to name devices in IRIS). Nothing else.
+if [[ -n ${BRIDGE_ES_PASSWORD:-} ]]; then
+  log "ensuring moat_bridge role and user"
+  es PUT /_security/role/moat_bridge '{"indices":[
+    {"names":[".alerts-security.alerts-*","logs-zeek.dhcp-*"],"privileges":["read"]}]}' >/dev/null
+  es POST /_security/user/moat_bridge "$(jq -n --arg p "$BRIDGE_ES_PASSWORD" '{
+    password: $p, roles: ["moat_bridge"], full_name: "moat IRIS bridge"}')" >/dev/null
+fi
+
 # --- Detection rules ---
 log "installing prebuilt detection rules (this can take a minute)"
 kb POST /api/detection_engine/index >/dev/null 2>&1 || true

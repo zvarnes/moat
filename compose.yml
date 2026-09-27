@@ -144,7 +144,8 @@ services:
       - caddydata:/data
     ports:
       - "${BIND_IP}:${KIBANA_PORT}:443"
-    networks: [soc]
+      - "${BIND_IP}:${IRIS_PORT:-8443}:8443"
+    networks: [soc, iris]
     restart: unless-stopped
 
   # ---- Network sensor (profile "sensor"; ./moat enables it when SENSOR_IFACE is set) ----
@@ -213,8 +214,149 @@ services:
     networks: [soc]
     restart: unless-stopped
 
+  # ---- Case management: DFIR-IRIS (profile "iris"; on by default in the standard profile) ----
+  # IRIS gets only its own settings (never env_file: .env, which holds Elastic secrets).
+  # Its DB and broker live on the iris network only; Caddy publishes the UI on IRIS_PORT.
+  iris-db:
+    image: ghcr.io/dfir-iris/iriswebapp_db:${IRIS_VERSION:-v2.4.29}
+    profiles: [iris]
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${IRIS_DB_PASSWORD:-}
+      - POSTGRES_ADMIN_USER=raptor
+      - POSTGRES_ADMIN_PASSWORD=${IRIS_DB_ADMIN_PASSWORD:-}
+      - POSTGRES_DB=iris_db
+    mem_limit: 512m
+    volumes:
+      - irisdb:/var/lib/postgresql/data
+    networks: [iris]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d iris_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  iris-rabbitmq:
+    image: rabbitmq:${IRIS_RABBITMQ_VERSION:-3.13.7-alpine}
+    profiles: [iris]
+    mem_limit: 384m
+    networks: [iris]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_port_connectivity"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+
+  iris-app:
+    image: ghcr.io/dfir-iris/iriswebapp_app:${IRIS_VERSION:-v2.4.29}
+    profiles: [iris]
+    command: ["nohup", "./iris-entrypoint.sh", "iriswebapp"]
+    depends_on:
+      iris-db: { condition: service_healthy }
+      iris-rabbitmq: { condition: service_healthy }
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${IRIS_DB_PASSWORD:-}
+      - POSTGRES_ADMIN_USER=raptor
+      - POSTGRES_ADMIN_PASSWORD=${IRIS_DB_ADMIN_PASSWORD:-}
+      - POSTGRES_DB=iris_db
+      - POSTGRES_SERVER=iris-db
+      - POSTGRES_PORT=5432
+      - DOCKERIZED=1
+      - IRIS_SECRET_KEY=${IRIS_SECRET_KEY:-}
+      - IRIS_SECURITY_PASSWORD_SALT=${IRIS_SECURITY_PASSWORD_SALT:-}
+      - CELERY_BROKER=amqp://iris-rabbitmq
+      - CELERY_HOST=iris-rabbitmq
+      - IRIS_AUTHENTICATION_TYPE=local
+      - IRIS_ADM_USERNAME=administrator
+      - IRIS_ADM_EMAIL=admin@moat.local
+      - IRIS_ADM_PASSWORD=${IRIS_ADM_PASSWORD:-}
+      - IRIS_ADM_API_KEY=${IRIS_ADM_API_KEY:-}
+      - IRIS_ORGANISATION_NAME=moat
+    mem_limit: 1g
+    volumes:
+      - irisdownloads:/home/iris/downloads
+      - iristemplates:/home/iris/user_templates
+      - irisserverdata:/home/iris/server_data
+    networks: [iris]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost:8000/login"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 60s
+
+  iris-worker:
+    image: ghcr.io/dfir-iris/iriswebapp_app:${IRIS_VERSION:-v2.4.29}
+    profiles: [iris]
+    # Run Celery directly: IRIS's entrypoint backgrounds it (no signal handling) and
+    # uses one pool process per CPU, which overran 768 MB on an 8-core box. Two is
+    # plenty for module hooks (VirusTotal etc.) on a home SOC.
+    command: ["./wait-for-iriswebapp.sh", "iris-app:8000", "celery", "-A", "app.celery", "worker",
+              "-E", "-B", "-l", "INFO", "--concurrency", "${IRIS_WORKER_CONCURRENCY:-2}"]
+    depends_on:
+      iris-app: { condition: service_healthy }
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${IRIS_DB_PASSWORD:-}
+      - POSTGRES_ADMIN_USER=raptor
+      - POSTGRES_ADMIN_PASSWORD=${IRIS_DB_ADMIN_PASSWORD:-}
+      - POSTGRES_DB=iris_db
+      - POSTGRES_SERVER=iris-db
+      - POSTGRES_PORT=5432
+      - DOCKERIZED=1
+      - IRIS_SECRET_KEY=${IRIS_SECRET_KEY:-}
+      - IRIS_SECURITY_PASSWORD_SALT=${IRIS_SECURITY_PASSWORD_SALT:-}
+      - CELERY_BROKER=amqp://iris-rabbitmq
+      - CELERY_HOST=iris-rabbitmq
+      - IRIS_AUTHENTICATION_TYPE=local
+      - IRIS_ADM_USERNAME=administrator
+      - IRIS_ADM_EMAIL=admin@moat.local
+      - IRIS_ADM_PASSWORD=${IRIS_ADM_PASSWORD:-}
+      - IRIS_ADM_API_KEY=${IRIS_ADM_API_KEY:-}
+      - IRIS_ORGANISATION_NAME=moat
+    mem_limit: 768m
+    volumes:
+      - irisdownloads:/home/iris/downloads
+      - iristemplates:/home/iris/user_templates
+      - irisserverdata:/home/iris/server_data
+    networks: [iris]
+    restart: unless-stopped
+
+  # Forwards open Security alerts into IRIS as alerts (with IOCs + device names), and
+  # configures IRIS integrations (customer, VirusTotal). Stdlib Python, non-root, read-only.
+  bridge:
+    build: ./bridge
+    image: moat-bridge:local
+    profiles: [iris]
+    depends_on:
+      iris-app: { condition: service_healthy }
+    user: "1000"
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      - ES_URL=https://es01:9200
+      - BRIDGE_ES_PASSWORD=${BRIDGE_ES_PASSWORD:-}
+      - IRIS_URL=http://iris-app:8000
+      - IRIS_API_KEY=${IRIS_ADM_API_KEY:-}
+      - KIBANA_PUBLIC_URL=https://${HOST_IP}:${KIBANA_PORT}
+      - IRIS_PUBLIC_URL=https://${HOST_IP}:${IRIS_PORT:-8443}
+      - BRIDGE_MIN_SEVERITY=${BRIDGE_MIN_SEVERITY:-medium}
+      - VT_API_KEY=${VT_API_KEY:-}
+    mem_limit: 128m
+    volumes:
+      - bridgestate:/state
+      - { type: volume, source: certs, target: /certs/public, read_only: true, volume: { subpath: public } }
+    networks: [soc, iris]
+    restart: unless-stopped
+
 networks:
   soc:
+  iris:
 
 volumes:
   certs:
@@ -228,3 +370,8 @@ volumes:
   suricatalogs:
   suricatarules:
   sensordata:
+  irisdb:
+  irisdownloads:
+  iristemplates:
+  irisserverdata:
+  bridgestate:

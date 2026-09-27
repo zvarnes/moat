@@ -35,6 +35,20 @@ Startup chain, each gated on the previous one:
 6. `fleet-server`: elastic-agent container, `FLEET_SERVER_SERVICE_TOKEN_PATH`; it has a healthcheck, and `./moat up` fails unless it is healthy.
 7. `caddy`: :443 → kibana; serves `/moat-ca.crt` for agent enrollment. It mounts only the kibana/ and public/ subpaths of the certs volume, never the CA key.
 
+Case management uses compose profile `iris` (`IRIS_ENABLED=true` by default in standard, false in lite):
+- `iris-db`, `iris-rabbitmq` (3.13.7-alpine; IRIS 2.4 pins RabbitMQ 3.x and 3.13 is EOL upstream, revisit when IRIS moves), `iris-app`, `iris-worker`, all DFIR-IRIS **v2.4.29** (v3 is beta).
+- Explicit env only, no `env_file` (verified: 0 Elastic secrets in these containers). Caddy serves IRIS on `IRIS_PORT` (8443), and IRIS trusts X-Forwarded-Proto via ProxyFix.
+- The worker runs Celery directly with `--concurrency ${IRIS_WORKER_CONCURRENCY:-2}`. IRIS's entrypoint forks one process per CPU (765 MB on 8 cores).
+- `bridge` (`bridge/bridge.py`, stdlib only, non-root, read-only):
+  - polls open Security alerts ≥ `BRIDGE_MIN_SEVERITY` every 60 s and creates IRIS alerts via `POST /alerts/add`, with IOCs (external IPs, domains, URLs rebuilt from `url.domain`+`url.original`, hashes) and assets (internal IPs named from `logs-zeek.dhcp-*`);
+  - creates the IRIS customer "moat home";
+  - sets the VirusTotal module's `api_key` param when `VT_API_KEY` is set;
+  - keeps state in `/state/state.json` (no duplicates across restarts, verified);
+  - reads ES as `moat_bridge` (read on alerts + zeek.dhcp only; bootstrap creates it).
+- New secrets come via `./moat init --add-missing` (appends keys new in `.env.example`, generates secrets, never changes existing values).
+- Tailscale: `tailscale serve --https=8443 https+insecure://<HOST_IP>:8443` makes IRIS reachable at https://<tailnet-host>:8443.
+- IRIS renders alert descriptions as HTML: `&times…` in a URL shows as "×", so put `timestamp=` first in the Kibana link.
+
 Sensor services use compose profile `sensor`. `./moat`'s `compose()` enables it when `SENSOR_IFACE` is set, and `destroy` always includes it.
 - `zeek` (`zeek/zeek`, host network): `sensors/zeek/run.sh` + `moat.zeek`. JSON logs go to `zeeklogs:/zeek/current`, rotated hourly to `/zeek/archive`, and pruned after `SENSOR_LOG_HOURS`. `Site::local_nets` comes from `LOCAL_NETS` (default RFC1918). No zeekctl.
 - `suricata` (`jasonish/suricata`, host network, PUID/PGID 1000): `sensors/suricata/run.sh` runs `suricata-update` (ET Open, with `sensors/suricata/disable.conf`) at start and daily, then reloads with SIGUSR2. EVE is `eve-%Y%m%d-%H.json`, rotated hourly. Suricata disables NIC offloads itself.
@@ -95,6 +109,7 @@ Ports 443 / 8220 / 9200 bind to `BIND_IP` (= HOST_IP). Secrets live only in `.en
 - Keep scripts idempotent: check before create; never regenerate the CA if it exists.
 - Record measured RAM (`docker stats`) and GB/day in the plan doc so the profile defaults can be tuned.
   - 2026-09-27 with sensors: ES 5.4/6 GB, Kibana 1.6/2 GB (the old 1.5 GB cap starved it), Fleet Server 180/768 MB, Suricata 550 MB/3 GB (53k rules), sensor-agent 220 MB/1 GB, Zeek 110 MB/2 GB, Caddy 17 MB.
+  - 2026-09-27 with IRIS: iris-app 184 MB, iris-worker 258 MB (after the concurrency fix), iris-rabbitmq 135 MB, iris-db 49 MB, bridge 14 MB. Host total ~13/30 GB used.
   - GB/day: not measured yet (needs a full day).
 
 ## Roadmap
