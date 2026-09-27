@@ -118,16 +118,16 @@ def configure_virustotal():
         log("VT_API_KEY not set; VirusTotal enrichment off (add a free key to .env)")
         return
     mods = iris("GET", "/manage/modules/list")
-    mod = next((m for m in mods if "virustotal" in (m.get("module_human_name", "") +
-                                                   m.get("interface_module_name", "")).lower()), None)
+    # IRIS 2.4 lists it as module_human_name "IrisVT" (no "VirusTotal" anywhere).
+    mod = next((m for m in mods if m.get("module_human_name", "").lower() in ("irisvt", "iris vt")
+                or "virustotal" in m.get("module_human_name", "").lower()), None)
     if not mod:
-        log("WARN: IRIS VirusTotal module not found")
+        log(f"WARN: IRIS VirusTotal module not found; modules: {[m.get('module_human_name') for m in mods]}")
         return
     mid = mod["id"]
     # Parameter names come from the module's own config, not guesses.
-    cfg = iris("GET", f"/manage/modules/export-config/{mid}")
-    params = cfg.get("module_configuration", cfg) if isinstance(cfg, dict) else cfg
-    name = next((p["param_name"] for p in params if "api_key" in p.get("param_name", "")), None)
+    params = mod.get("module_config") or []
+    name = next((p["param_name"] for p in params if p.get("param_name", "").endswith("api_key")), None)
     if not name:
         log(f"WARN: no api_key parameter on VirusTotal module; params={[p.get('param_name') for p in params]}")
         return

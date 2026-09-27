@@ -51,7 +51,10 @@ Case management uses compose profile `iris` (`IRIS_ENABLED=true` by default in s
   - `rules/moat-ti-domain-match.json` covers DNS names (no prebuilt equivalent).
   - `sensor-agent` is always on now (policy display name "moat collector", id still `moat-sensor`).
   - Verified with a synthetic indicator in `logs-ti_moattest.indicator-default` (deleted afterwards): DNS lookup → 6 high alerts → IRIS with a domain IOC.
-  - Real feeds are not yet exercised; they need the user's free keys.
+  - Real feeds verified 2026-09-27: abuse.ch (ThreatFox, URLhaus, SSLBL, malware, JA3, MalwareBazaar) and OTX loaded ~30k indicators within a minute of `./moat up`.
+  - **The domain rule must use `threat.indicator.type:"domain-name"` only.** URL-type IOCs (URLhaus/ThreatFox) often point at one file on a big platform, and matching their host flagged every lookup of github.com, cdn.discordapp.com and cdn.jsdelivr.net (35 false positives, closed as FP in Kibana + IRIS). Full URLs are the prebuilt URL rule's job.
+  - Elastic's prebuilt Threat Intel indicator-match rules run **hourly** (1 h lookback), not every 5 min.
+  - IRIS's VirusTotal module is `module_human_name: "IrisVT"` (param `vt_api_key`), and the list endpoint includes `module_config`. The bridge enables it when `VT_API_KEY` is set (verified: configured + active).
 - Tailscale: `tailscale serve --https=8443 https+insecure://<HOST_IP>:8443` makes IRIS reachable at https://<tailnet-host>:8443.
 - IRIS renders alert descriptions as HTML: `&times…` in a URL shows as "×", so put `timestamp=` first in the Kibana link.
 
