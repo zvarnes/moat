@@ -1,0 +1,23 @@
+{
+  "rule_id": "moat-ti-domain-match",
+  "name": "moat: DNS lookup of a threat-intel domain",
+  "description": "A device resolved a domain that a threat intel feed (abuse.ch, OTX, ...) lists as malicious. Elastic's prebuilt indicator-match rules cover IPs, URLs and hashes but not DNS names, which is where most home compromises show up first. Check which device asked (source.ip) and what the indicator says (threat.enrichments).",
+  "type": "threat_match",
+  "language": "kuery",
+  "index": ["logs-zeek.dns-*"],
+  "query": "dns.question.name:*",
+  "threat_index": ["logs-ti_*"],
+  "threat_query": "@timestamp >= \"now-30d/d\" and threat.indicator.url.domain:* and not labels.is_ioc_transform_source:\"true\"",
+  "threat_mapping": [
+    {"entries": [{"field": "dns.question.name", "type": "mapping", "value": "threat.indicator.url.domain"}]}
+  ],
+  "threat_indicator_path": "threat.indicator",
+  "threat_language": "kuery",
+  "severity": "high",
+  "risk_score": 73,
+  "interval": "5m",
+  "from": "now-10m",
+  "max_signals": 100,
+  "tags": ["moat", "Threat Intel", "Data Source: Zeek", "Domain: Network"],
+  "enabled": true
+}

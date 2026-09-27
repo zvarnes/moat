@@ -253,7 +253,11 @@ cmd_up() {
   if [[ -n ${SENSOR_IFACE:-} ]]; then
     [[ -e /sys/class/net/$SENSOR_IFACE ]] || die "SENSOR_IFACE=$SENSOR_IFACE does not exist on this host"
     hdr "Starting network sensor on $SENSOR_IFACE (first run downloads ET Open rules)"
-    compose up -d --no-deps zeek suricata sensor-agent  # deps (bootstrap, fleet-server) already up above
+    compose up -d --no-deps zeek suricata  # deps (bootstrap, fleet-server) already up above
+  fi
+  # The collector (syslog, threat intel, sensor logs) runs with or without a sensor NIC.
+  compose up -d --no-deps sensor-agent
+  if [[ -n ${SENSOR_IFACE:-} ]]; then
     local svc st
     for svc in zeek suricata sensor-agent; do
       st=$(compose ps -a "$svc" --format '{{.State}}' 2>/dev/null || true)

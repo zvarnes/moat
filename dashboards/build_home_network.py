@@ -32,10 +32,11 @@ def uid(*parts):
 
 
 # ---- column builders --------------------------------------------------------------
-def count(label="Count"):
+def count(label="Count", zero_if_empty=False):
+    # emptyAsNull suits charts (gaps, not zeros); status numbers should read 0, not N/A.
     return {"label": label, "customLabel": True, "dataType": "number", "operationType": "count",
             "isBucketed": False, "scale": "ratio", "sourceField": "___records___",
-            "params": {"emptyAsNull": True}}
+            "params": {"emptyAsNull": not zero_if_empty}}
 
 
 def metric(op, field, label, dtype="number", fmt=None):
@@ -112,13 +113,13 @@ def panels():
     return [
         # row 1: headline numbers (x, y, w, h)
         ((0, 0, 12, 6), p_metric("m_alerts", "Open security alerts", ALERTS,
-                                 count("Open alerts"), 'kibana.alert.workflow_status:"open"')),
+                                 count("Open alerts", zero_if_empty=True), 'kibana.alert.workflow_status:"open"')),
         ((12, 0, 12, 6), p_metric("m_devices", "Active devices", LOGS,
                                   metric("unique_count", "source.ip", "Devices"),
                                   'data_stream.dataset:"zeek.connection" and ' + LAN_V4)),
         ((24, 0, 12, 6), p_metric("m_dns", "DNS lookups", LOGS, count("Lookups"),
                                   'data_stream.dataset:"zeek.dns" and dns.question.name:*')),
-        ((36, 0, 12, 6), p_metric("m_blocks", "Blocked by the UDM", LOGS, count("Blocks"),
+        ((36, 0, 12, 6), p_metric("m_blocks", "Blocked by the UDM", LOGS, count("Blocks", zero_if_empty=True),
                                   'data_stream.dataset:"cef.log" and (cef.name:"Blocked by Firewall" '
                                   'or cef.extensions.UNIFIpolicyType:"IDS/IPS")')),
         # row 2: over time
@@ -186,6 +187,18 @@ def panels():
             count("Count"),
             metric("max", "@timestamp", "Last seen", dtype="date"),
         ], 'data_stream.dataset:"zeek.notice"')),
+        # row 7: threat intel (feeds need free keys in .env; see docs/threat-intel.md)
+        # The TI packages keep raw feed docs (labels.is_ioc_transform_source:true) plus a
+        # de-duplicated "latest" copy; count only the latter.
+        ((0, 72, 16, 10), p_metric("m_ti", "Threat intel indicators loaded", LOGS, count("Indicators", zero_if_empty=True),
+                                   'event.kind:"enrichment" and threat.indicator.type:* '
+                                   'and not labels.is_ioc_transform_source:"true"')),
+        ((16, 72, 32, 10), p_table("ti_hits", "Threat intel matches (device hit a listed indicator)", ALERTS, [
+            terms("kibana.alert.rule.name", "Rule", 10, uid("ti_hits", "3")),
+            terms("source.ip", "Device", 10, uid("ti_hits", "3"), dtype="ip"),
+            terms("kibana.alert.workflow_status", "Status", 3, uid("ti_hits", "3")),
+            count("Matches"),
+        ], 'kibana.alert.rule.type:"threat_match"')),
     ]
 
 

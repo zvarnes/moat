@@ -46,6 +46,11 @@ Case management uses compose profile `iris` (`IRIS_ENABLED=true` by default in s
   - keeps state in `/state/state.json` (no duplicates across restarts, verified);
   - reads ES as `moat_bridge` (read on alerts + zeek.dhcp only; bootstrap creates it).
 - New secrets come via `./moat init --add-missing` (appends keys new in `.env.example`, generates secrets, never changes existing values).
+- Threat intel (M4): `ti_abusech` / `ti_otx` are added to the collector policy only when `ABUSECH_AUTH_KEY` / `OTX_API_KEY` are set, and then the prebuilt IP/hash/URL indicator-match rules are enabled too.
+  - `rules/moat-ti-domain-match.json` covers DNS names (no prebuilt equivalent).
+  - `sensor-agent` is always on now (policy display name "moat collector", id still `moat-sensor`).
+  - Verified with a synthetic indicator in `logs-ti_moattest.indicator-default` (deleted afterwards): DNS lookup → 6 high alerts → IRIS with a domain IOC.
+  - Real feeds are not yet exercised; they need the user's free keys.
 - Tailscale: `tailscale serve --https=8443 https+insecure://<HOST_IP>:8443` makes IRIS reachable at https://<tailnet-host>:8443.
 - IRIS renders alert descriptions as HTML: `&times…` in a URL shows as "×", so put `timestamp=` first in the Kibana link.
 

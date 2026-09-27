@@ -143,6 +143,25 @@ else
   log "logs-cef.log@custom was not created by moat, leaving it alone"
 fi
 
+# --- Threat intel feeds (free keys; each is added only once its key is in .env) ---
+# Indicators land in logs-ti_*; the packages' own transforms expire old IOCs.
+ti=0
+if [[ -n ${ABUSECH_AUTH_KEY:-} ]]; then
+  add_sensor_integration ti-abusech ti_abusech "$(jq -nc --arg k "$ABUSECH_AUTH_KEY" \
+    '{"ti_abusech-cel": {enabled: true, vars: {auth_key: $k}}}')"
+  ti=1
+fi
+if [[ -n ${OTX_API_KEY:-} ]]; then
+  add_sensor_integration ti-otx ti_otx "$(jq -nc --arg k "$OTX_API_KEY" \
+    '{"ti_otx-httpjson": {enabled: false},
+      "ti_otx-cel": {enabled: true, streams: {"ti_otx.pulses_subscribed": {enabled: true, vars: {api_key: $k}}}}}')"
+  ti=1
+fi
+(( ti )) || log "no threat-intel keys in .env (ABUSECH_AUTH_KEY / OTX_API_KEY); feeds skipped. See docs/threat-intel.md"
+# The policy started as sensor-only; it now also carries syslog and intel.
+kb PUT /api/fleet/agent_policies/moat-sensor '{"name":"moat collector","namespace":"default",
+  "description":"Router syslog, threat-intel feeds, and Zeek + Suricata (sensor profile)"}' >/dev/null
+
 # Enrollment token for the sensor-agent container (only used on its first start).
 tok=$(kb GET "/api/fleet/enrollment_api_keys?perPage=100&kuery=policy_id:moat-sensor" \
   | jq -r '[.items[] | select(.active)][0].api_key // empty')
@@ -205,7 +224,10 @@ for tag in "${tags[@]}"; do
     | jq -c '.attributes.summary // .' || log "WARN: enabling '${tag}' failed"
 done
 
-IFS='|' read -ra ids <<<"${ENABLE_RULE_IDS:-}"
+# Prebuilt indicator-match rules (IP, hash, URL) only once a feed is configured.
+ti_rules=""
+(( ti )) && ti_rules="0c41e478-5263-4c69-8f9e-7dfd2c22da64|aab184d3-72b3-4639-b242-6597c99d8bca|f3e22c8b-ea47-45d1-b502-b57b6de950b3"
+IFS='|' read -ra ids <<<"${ENABLE_RULE_IDS:-}${ti_rules:+|$ti_rules}"
 for id in "${ids[@]}"; do
   [[ -z $id ]] && continue
   log "enabling prebuilt rule ${id}"

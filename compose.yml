@@ -187,11 +187,12 @@ services:
       - suricatarules:/var/lib/suricata
     restart: unless-stopped
 
-  # Ships Zeek + Suricata logs to ES via the "Sensor" Fleet policy (default output;
-  # per-policy outputs need Platinum). Enrolls once with the token bootstrap wrote.
+  # The collector agent (Fleet policy "moat collector", id moat-sensor): router syslog,
+  # threat-intel feeds, and Zeek + Suricata logs when the sensor profile runs. Always on.
+  # Uses the default output (per-policy outputs need Platinum). Enrolls once with the
+  # token bootstrap wrote.
   sensor-agent:
     image: docker.elastic.co/elastic-agent/elastic-agent:${STACK_VERSION}
-    profiles: [sensor]
     depends_on:
       fleet-server: { condition: service_healthy }
     user: "1000"
