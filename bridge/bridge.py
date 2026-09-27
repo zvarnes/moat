@@ -203,8 +203,15 @@ def to_iris(hit, lk, names):
     link = (f"{KIBANA}/app/security/alerts/redirect/{hit['_id']}"
             f"?timestamp={ts}&index=.alerts-security.alerts-default") if KIBANA else ""
     tags = get("kibana.alert.rule.tags", []) or []
+    # Put the thing that matched in the title, so the queue is readable without
+    # opening each alert: the threat-intel value, else the DNS name.
+    enrich = src.get("threat", {}).get("enrichments") if isinstance(src.get("threat"), dict) else None
+    matched = next((e.get("matched", {}).get("atomic") for e in (enrich or []) if isinstance(e, dict)), None)
+    key = matched or first(get("dns.question.name"))
+    title = f"{rule}: {key}" if key and str(key) not in rule else rule
+
     return {
-        "alert_title": rule,
+        "alert_title": title,
         "alert_description": f"{get('kibana.alert.reason', '')}\n\nKibana: {link}".strip(),
         "alert_source": "moat / Elastic Security",
         "alert_source_ref": hit["_id"],
