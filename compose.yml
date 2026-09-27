@@ -203,6 +203,9 @@ services:
       - sensordata:/usr/share/elastic-agent/state
       - zeeklogs:/sensor/zeek:ro
       - suricatalogs:/sensor/suricata:ro
+    ports:
+      # Syslog (CEF) from the UDM Pro / UniFi SIEM Server setting.
+      - "${BIND_IP}:${SYSLOG_PORT:-5514}:5514/udp"
     networks: [soc]
     restart: unless-stopped
 

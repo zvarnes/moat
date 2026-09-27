@@ -54,7 +54,7 @@ else
     }]}')" >/dev/null
 fi
 
-# --- Network retention (Zeek + Suricata) ---
+# --- Network retention (Zeek, Suricata, UDM syslog via CEF) ---
 # Before the packages are installed, so their first data streams pick it up. The
 # <package>@custom hook is composed into every one of the package's index templates.
 days=${RETENTION_NETWORK_DAYS:-7}
@@ -65,7 +65,7 @@ es PUT /_ilm/policy/moat-network "$(jq -n --arg d "${days}d" '{policy: {
     delete: {min_age: $d, actions: {delete: {}}}
   },
   _meta: {managed_by: "moat"}}}')" >/dev/null
-for t in zeek suricata; do
+for t in zeek suricata cef; do
   if cur=$(es GET "/_component_template/${t}@custom" 2>/dev/null); then
     owner=$(jq -r '.component_templates[0].component_template._meta.managed_by // "user"' <<<"$cur")
   else
@@ -78,7 +78,7 @@ for t in zeek suricata; do
   es PUT "/_component_template/${t}@custom" \
     '{"template":{"settings":{"index":{"lifecycle":{"name":"moat-network"}}}},"_meta":{"managed_by":"moat"}}' >/dev/null
 done
-es PUT "/logs-zeek.*,logs-suricata.*/_settings?expand_wildcards=all&allow_no_indices=true" \
+es PUT "/logs-zeek.*,logs-suricata.*,logs-cef.*/_settings?expand_wildcards=all&allow_no_indices=true" \
   '{"index":{"lifecycle":{"name":"moat-network"}}}' >/dev/null
 
 # --- Sensor policy: Zeek + Suricata, read by the sensor-agent container ---
@@ -108,6 +108,11 @@ add_sensor_integration zeek-sensor zeek \
   '{"zeek-logfile":{"enabled":true,"vars":{"base_paths":["/sensor/zeek/current"]}}}'
 add_sensor_integration suricata-sensor suricata \
   '{"suricata-logfile":{"enabled":true,"streams":{"suricata.eve":{"enabled":true,"vars":{"paths":["/sensor/suricata/eve-*.json"]}}}}}'
+# UDM Pro / UniFi "SIEM Server" sends CEF over syslog. The sensor-agent listens on UDP
+# 5514; compose publishes it on BIND_IP:${SYSLOG_PORT}.
+add_sensor_integration udm-cef cef \
+  '{"cef-logfile":{"enabled":false},"cef-tcp":{"enabled":false},
+    "cef-udp":{"enabled":true,"streams":{"cef.log":{"enabled":true,"vars":{"syslog_host":"0.0.0.0","syslog_port":5514}}}}}'
 
 # Enrollment token for the sensor-agent container (only used on its first start).
 tok=$(kb GET "/api/fleet/enrollment_api_keys?perPage=100&kuery=policy_id:moat-sensor" \
