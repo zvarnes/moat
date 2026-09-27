@@ -32,7 +32,7 @@ Menu names shift between Network app versions; this is the general path.
 3. Set **Operation / Port Profile** to **Mirroring**, and choose the **source** port from step 1.
 4. Apply. The destination port no longer passes normal traffic; it only transmits copies.
 
-Plug the USB-C Ethernet adapter into that destination port.
+Plug the sensor NIC into that destination port. Any spare wired NIC works: a USB-C adapter, or the laptop's built-in port if management runs over Wi-Fi.
 
 ## 3. Prepare the sensor NIC on the laptop
 
@@ -42,10 +42,12 @@ Find the adapter name (usually `enx<mac>` for USB NICs):
 ./moat preflight          # lists NICs; the USB one shows bus "usb"
 ```
 
-Make sure NetworkManager / netplan won't put an IP on it. On Ubuntu Desktop:
+Make sure NetworkManager / netplan won't put an IP on it. On Ubuntu Desktop, keep the
+profile but give it no addresses (this needs no sudo on a desktop session):
 
 ```bash
-nmcli device set enx001122334455 managed no
+nmcli connection show                       # find the profile for the NIC
+nmcli connection modify <profile> ipv4.method disabled ipv6.method disabled
 ```
 
 On Ubuntu Server (netplan), add to `/etc/netplan/99-moat.yaml` and `sudo netplan apply`:
@@ -61,7 +63,9 @@ network:
       optional: true
 ```
 
-Put it in capture mode now and on every boot:
+Capture mode is **optional**: Zeek and Suricata put the NIC in promiscuous mode
+themselves, and Suricata disables NIC offloading while it runs. To also force it
+at boot (e.g. for ad-hoc tcpdump use):
 
 ```bash
 sudo apt install -y ethtool tcpdump
@@ -74,6 +78,8 @@ sudo systemctl enable --now moat-sensor-nic@enx001122334455.service
 
 ```bash
 sudo timeout 15 tcpdump -ni enx001122334455 -c 50 not arp
+# no sudo? use a throwaway container:
+docker run --rm --net=host --cap-add=NET_RAW alpine:3.22 sh -c 'apk add -q tcpdump && timeout 15 tcpdump -ni enx001122334455 -c 50 not arp'
 ```
 
 You should see DNS, TLS, and other traffic from devices **other than the laptop**. Quick checks:
@@ -82,4 +88,4 @@ You should see DNS, TLS, and other traffic from devices **other than the laptop*
 - Nothing at all → cable/port, or the interface isn't `up` (`ip link show enx…`).
 - Drops under load → `ethtool -S enx… | grep -i drop`. Most USB 1 GbE adapters are fine at home traffic levels.
 
-Record the interface in `.env` as `SENSOR_IFACE=` so Phase 2 (Zeek + Suricata) picks it up.
+Record the interface in `.env` as `SENSOR_IFACE=`, then `./moat up` starts Zeek, Suricata and the sensor agent on it.

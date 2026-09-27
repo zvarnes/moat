@@ -54,6 +54,69 @@ else
     }]}')" >/dev/null
 fi
 
+# --- Network retention (Zeek + Suricata) ---
+# Before the packages are installed, so their first data streams pick it up. The
+# <package>@custom hook is composed into every one of the package's index templates.
+days=${RETENTION_NETWORK_DAYS:-7}
+log "network data retention: ${days} days (ILM policy moat-network)"
+es PUT /_ilm/policy/moat-network "$(jq -n --arg d "${days}d" '{policy: {
+  phases: {
+    hot: {actions: {rollover: {max_age: "1d", max_primary_shard_size: "10gb"}}},
+    delete: {min_age: $d, actions: {delete: {}}}
+  },
+  _meta: {managed_by: "moat"}}}')" >/dev/null
+for t in zeek suricata; do
+  if cur=$(es GET "/_component_template/${t}@custom" 2>/dev/null); then
+    owner=$(jq -r '.component_templates[0].component_template._meta.managed_by // "user"' <<<"$cur")
+  else
+    owner=none
+  fi
+  if [[ $owner != moat && $owner != none ]]; then
+    log "${t}@custom was not created by moat, leaving it alone"
+    continue
+  fi
+  es PUT "/_component_template/${t}@custom" \
+    '{"template":{"settings":{"index":{"lifecycle":{"name":"moat-network"}}}},"_meta":{"managed_by":"moat"}}' >/dev/null
+done
+es PUT "/logs-zeek.*,logs-suricata.*/_settings?expand_wildcards=all&allow_no_indices=true" \
+  '{"index":{"lifecycle":{"name":"moat-network"}}}' >/dev/null
+
+# --- Sensor policy: Zeek + Suricata, read by the sensor-agent container ---
+if kb GET /api/fleet/agent_policies/moat-sensor >/dev/null 2>&1; then
+  log "Sensor policy exists"
+else
+  log "creating Sensor agent policy"
+  kb POST /api/fleet/agent_policies '{"id":"moat-sensor","name":"Sensor","namespace":"default",
+    "description":"Zeek + Suricata on the mirror port (sensor-agent container)",
+    "monitoring_enabled":["logs","metrics"]}' >/dev/null
+fi
+# name, package, simplified-API inputs (paths are inside the sensor-agent container)
+add_sensor_integration() {
+  local name=$1 pkg=$2 inputs=$3 ver
+  if kb GET "/api/fleet/package_policies?perPage=100&kuery=ingest-package-policies.name:${name}" \
+      | jq -e '.total > 0' >/dev/null; then
+    log "${pkg} already on Sensor policy"; return
+  fi
+  kb POST "/api/fleet/epm/packages/${pkg}" >/dev/null
+  ver=$(kb GET "/api/fleet/epm/packages/${pkg}" | jq -r '.item.version')
+  log "adding ${pkg} ${ver} to Sensor policy"
+  kb POST /api/fleet/package_policies "$(jq -n --arg n "$name" --arg p "$pkg" --arg v "$ver" \
+    --argjson i "$inputs" '{name: $n, namespace: "default", policy_ids: ["moat-sensor"],
+    package: {name: $p, version: $v}, inputs: $i}')" >/dev/null
+}
+add_sensor_integration zeek-sensor zeek \
+  '{"zeek-logfile":{"enabled":true,"vars":{"base_paths":["/sensor/zeek/current"]}}}'
+add_sensor_integration suricata-sensor suricata \
+  '{"suricata-logfile":{"enabled":true,"streams":{"suricata.eve":{"enabled":true,"vars":{"paths":["/sensor/suricata/eve-*.json"]}}}}}'
+
+# Enrollment token for the sensor-agent container (only used on its first start).
+tok=$(kb GET "/api/fleet/enrollment_api_keys?perPage=100&kuery=policy_id:moat-sensor" \
+  | jq -r '[.items[] | select(.active)][0].api_key // empty')
+[[ -n $tok ]] || die "no enrollment token for the Sensor policy"
+printf '%s' "$tok" > /tokens/sensor.enroll
+chown 1000:0 /tokens/sensor.enroll
+chmod 640 /tokens/sensor.enroll
+
 # --- Analyst role + user (daily driver; elastic stays for admin) ---
 log "ensuring moat_analyst role and analyst user"
 kb PUT /api/security/role/moat_analyst "$(jq -n '{
@@ -84,6 +147,15 @@ for tag in "${tags[@]}"; do
     action: "enable",
     query: ("alert.attributes.tags: \"" + $t + "\" AND alert.attributes.params.immutable: true")}')" \
     | jq -c '.attributes.summary // .' || log "WARN: enabling '${tag}' failed"
+done
+
+IFS='|' read -ra ids <<<"${ENABLE_RULE_IDS:-}"
+for id in "${ids[@]}"; do
+  [[ -z $id ]] && continue
+  log "enabling prebuilt rule ${id}"
+  kb POST /api/detection_engine/rules/_bulk_action "$(jq -n --arg i "$id" '{
+    action: "enable", query: ("alert.attributes.params.ruleId: \"" + $i + "\"")}')" \
+    | jq -c '.attributes.summary // .' || log "WARN: enabling rule '${id}' failed"
 done
 
 log "done"

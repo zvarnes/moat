@@ -15,7 +15,9 @@ bad()  { printf '  %s✘%s %s\n' "$R" "$N" "$*"; }
 die()  { printf '%sError:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
 hdr()  { printf '\n%s%s%s\n' "$B" "$*" "$N"; }
 
-compose() { docker compose --env-file "$ENV_FILE" "$@"; }
+# The sensor services (Zeek, Suricata, sensor-agent) are in the "sensor" profile,
+# enabled whenever SENSOR_IFACE is set.
+compose() { COMPOSE_PROFILES=${SENSOR_IFACE:+sensor} docker compose --env-file "$ENV_FILE" "$@"; }
 load_env() {
   [[ -f $ENV_FILE ]] || die "no .env yet — run ./moat init first"
   set -a; # shellcheck disable=SC1090
@@ -185,6 +187,16 @@ cmd_up() {
   [[ $rc == 0 ]] || { compose logs bootstrap | tail -20; die "bootstrap failed (exit $rc) — fix and run ./moat bootstrap"; }
   local fs; fs=$(compose ps fleet-server --format '{{.Health}}' 2>/dev/null || true)
   [[ $fs == healthy ]] || { compose logs --tail 20 fleet-server; die "fleet-server is not healthy (${fs:-not running}) — see ./moat logs fleet-server"; }
+  if [[ -n ${SENSOR_IFACE:-} ]]; then
+    [[ -e /sys/class/net/$SENSOR_IFACE ]] || die "SENSOR_IFACE=$SENSOR_IFACE does not exist on this host"
+    hdr "Starting network sensor on $SENSOR_IFACE (first run downloads ET Open rules)"
+    compose up -d zeek suricata sensor-agent
+    local svc st
+    for svc in zeek suricata sensor-agent; do
+      st=$(compose ps -a "$svc" --format '{{.State}}' 2>/dev/null || true)
+      [[ $st == running ]] || { compose logs --tail 20 "$svc"; die "$svc is not running (${st:-missing})"; }
+    done
+  fi
   echo
   printf '%sReady.%s Kibana: https://%s%s\n' "$G" "$N" "$HOST_IP" "$([[ $KIBANA_PORT == 443 ]] || echo ":$KIBANA_PORT")"
   echo "  Log in as 'analyst' (password: ./moat creds). Browser will warn about the local CA — see docs."
@@ -197,7 +209,7 @@ cmd_destroy() {
   load_env
   read -rp "This deletes ALL moat data, certs and enrolled-agent trust. Type 'destroy' to confirm: " a
   [[ $a == destroy ]] || die "aborted"
-  compose down -v --remove-orphans
+  COMPOSE_PROFILES=sensor docker compose --env-file "$ENV_FILE" down -v --remove-orphans
   ok "stack and volumes removed (.env kept; delete it and re-run init for new secrets)"
 }
 cmd_creds() {
