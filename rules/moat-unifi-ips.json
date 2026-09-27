@@ -1,0 +1,23 @@
+{
+  "rule_id": "moat-unifi-ips",
+  "name": "moat: UniFi IPS detection",
+  "description": "Promotes UDM Pro IDS/IPS detections (received as CEF syslog) into Security alerts. The UDM sits inline and sees the WAN side, so this covers inbound attacks the mirror tap cannot see. Severity follows UniFi's risk rating.",
+  "type": "query",
+  "language": "kuery",
+  "index": ["logs-cef.log-*"],
+  "query": "cef.extensions.UNIFIpolicyType:\"IDS/IPS\"",
+  "severity": "medium",
+  "severity_mapping": [
+    {"field": "cef.extensions.UNIFIrisk", "operator": "equals", "value": "low", "severity": "low"},
+    {"field": "cef.extensions.UNIFIrisk", "operator": "equals", "value": "medium", "severity": "medium"},
+    {"field": "cef.extensions.UNIFIrisk", "operator": "equals", "value": "high", "severity": "high"},
+    {"field": "cef.extensions.UNIFIrisk", "operator": "equals", "value": "critical", "severity": "critical"}
+  ],
+  "risk_score": 47,
+  "rule_name_override": "cef.extensions.UNIFIipsSignature",
+  "interval": "5m",
+  "from": "now-10m",
+  "max_signals": 100,
+  "tags": ["moat", "Data Source: UniFi", "Domain: Network"],
+  "enabled": true
+}

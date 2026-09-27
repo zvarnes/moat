@@ -1,0 +1,17 @@
+{
+  "rule_id": "moat-zeek-notice",
+  "name": "moat: Zeek notice",
+  "description": "Promotes Zeek notices (scans, SSH guessing, etc.) into Security alerts. SSL::Invalid_Server_Cert is excluded: at home it is almost always IoT gear with self-signed certificates. Search zeek.notice in Discover to see everything.",
+  "type": "query",
+  "language": "kuery",
+  "index": ["logs-zeek.notice-*"],
+  "query": "not zeek.notice.note:\"SSL::Invalid_Server_Cert\"",
+  "severity": "medium",
+  "risk_score": 47,
+  "rule_name_override": "zeek.notice.note",
+  "interval": "5m",
+  "from": "now-10m",
+  "max_signals": 100,
+  "tags": ["moat", "Data Source: Zeek", "Domain: Network"],
+  "enabled": true
+}

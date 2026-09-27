@@ -192,4 +192,16 @@ for id in "${ids[@]}"; do
     | jq -c '.attributes.summary // .' || log "WARN: enabling rule '${id}' failed"
 done
 
+# --- moat rule pack (rules/*.json, mounted at /rules) ---
+# Files are the source of truth: create missing rules, update existing ones to match.
+for f in /rules/*.json; do
+  [[ -e $f ]] || continue
+  id=$(jq -r .rule_id "$f")
+  if kb GET "/api/detection_engine/rules?rule_id=${id}" >/dev/null 2>&1; then
+    kb PUT /api/detection_engine/rules "$(cat "$f")" >/dev/null && log "updated rule ${id}"
+  else
+    kb POST /api/detection_engine/rules "$(cat "$f")" >/dev/null && log "created rule ${id}"
+  fi
+done
+
 log "done"
