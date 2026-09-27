@@ -121,7 +121,7 @@ Ports 443 / 8220 / 9200 bind to `BIND_IP` (= HOST_IP). Secrets live only in `.en
 
 - **Phase 2:** done: Zeek + Suricata + sensor agent, network rule defaults, 7-day ILM.
   - Remaining: endpoint ILM (30d) once endpoints exist, and GB/day measurement.
-- **Phase 3:** started: `rules/` (3 rules) and `dashboards/` (moat: Home Network). Still to do: more rules, guided labs with Atomic Red Team and PCAPs, `make test-rules`.
+- **Phase 3:** largely done (2026-09-27): Sigma + Suricata local rules + Elastic rules as code, IRIS + bridge, threat intel, dashboard, and newcomer docs (`docs/getting-started|hunting-101|writing-detections|case-management|threat-intel.md`). Still to do: more rules, guided labs with Atomic Red Team and PCAPs, `make test-rules`.
 - **Phase 4:** lite-profile polish, backup/restore, docs site, v1.0.
 
 Plan doc (claude.ai): https://claude.ai/code/artifact/67029afa-f1bc-4508-9d3f-695881a61eae
