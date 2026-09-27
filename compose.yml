@@ -48,7 +48,8 @@ services:
     networks: [soc]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf --cacert config/certs/ca/ca.crt -u elastic:$${ELASTIC_PASSWORD} https://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      # printf is a shell builtin, so the password never appears in a process's argv.
+      test: ["CMD-SHELL", "printf 'user = \"elastic:%s\"\\n' \"$${ELASTIC_PASSWORD}\" | curl -sf -K - --cacert config/certs/ca/ca.crt https://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
       interval: 10s
       timeout: 10s
       retries: 60
@@ -165,7 +166,7 @@ services:
     restart: unless-stopped
 
   suricata:
-    image: jasonish/suricata:${SURICATA_VERSION:-8.0.6}
+    image: jasonish/suricata:${SURICATA_VERSION:-8.0.7}
     profiles: [sensor]
     network_mode: host
     cap_add: [NET_ADMIN, NET_RAW, SYS_NICE]

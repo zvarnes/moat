@@ -62,12 +62,16 @@ Ports 443 / 8220 / 9200 bind to `BIND_IP` (= HOST_IP). Secrets live only in `.en
 - ES serves `es01.chain.crt` (leaf + CA). Agents trust ES via `ca_trusted_fingerprint`, which only matches certs the server actually sends.
 - `./moat up` re-renders kibana.yml but does not restart a running Kibana. After template changes, run `docker compose restart kibana`.
 - A few seconds of yellow right after new data streams appear is expected: `auto_expand_replicas` drops the replica asynchronously. Only persistent yellow is a problem.
+- Credentials never go on a process command line; container processes show in the host's `ps`. Use curl `-K` config: host helpers pipe it on stdin, and container helpers use `-K <(auth_cfg)` placed **on the curl command itself** (a process substitution inside an array assignment is a closed fd by the time curl runs). Secret bodies go via `--data-binary @-`. Verify with a `/proc/*/cmdline` scan plus a canary positive control.
+- Before bumping `STACK_VERSION`, check the image registry (docker.elastic.co tags). artifacts-api lists versions before their images are published (9.5.5 wasn't pullable on 2026-09-27).
+- Re-PUTting a GET'd index template needs `created_date_millis`/`modified_date_millis` removed.
+- `.lists-default`/`.items-default` (Security value lists) have no `@custom` hook. Bootstrap patches their templates and fixes any index with replicas > 0 at the end of every run.
+- The analyst role needs `manage` on `.alerts-security*`, `.lists*`, `.items*`, or Security shows an "Insufficient privileges" *info* callout. `tests/ui-check.sh [analyst|elastic]` renders key pages in Playwright and fails on error or privilege callouts. Check the screenshots in `tests/out/` too.
 - `./moat logs` follows forever. In scripts, use `docker compose --env-file .env logs --no-color <svc>`.
 
 ## Open issues
 
 - `certs.sh` never reissues an existing cert, so a `HOST_IP` change needs a rebuild (`destroy` + `init --force`) or manual cert rotation.
-- The analyst role uses Kibana `base: ["all"]`. Tighten it to specific feature privileges (see `/api/security/features`).
 - Alert policy (2026-09-27): prebuilt "External Alerts" is **off**, because it promoted every Suricata/Zeek alert (~2,500 per 2h). Replaced by `rules/`:
   - `moat-suricata-alert`: severity ≤ 2 only; severity 3 stays searchable.
   - `moat-zeek-notice`: excludes `SSL::Invalid_Server_Cert`.

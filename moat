@@ -23,20 +23,22 @@ load_env() {
   set -a; # shellcheck disable=SC1090
   source "$ENV_FILE"; set +a
 }
-# Run curl inside the Kibana container against Kibana's API as elastic.
+# Run curl inside the Kibana / ES containers as elastic. The password reaches curl as a
+# config on stdin (-K -), never on a command line (container processes show in host ps).
+auth_cfg() { printf 'user = "elastic:%s"\n' "$ELASTIC_PASSWORD"; }
 kb() {
   local method=$1 path=$2 body=${3:-}
-  local args=(-sS --fail-with-body --cacert /certs/ca/ca.crt -u "elastic:${ELASTIC_PASSWORD}" -X "$method"
+  local args=(-sS --fail-with-body --cacert /certs/ca/ca.crt -K - -X "$method"
               -H 'Content-Type: application/json' -H 'kbn-xsrf: moat' "https://localhost:5601${path}")
   [[ -n $body ]] && args+=(-d "$body")
-  compose exec -T kibana curl "${args[@]}"
+  auth_cfg | compose exec -T kibana curl "${args[@]}"
 }
 es() {
   local method=$1 path=$2 body=${3:-}
-  local args=(-sS --fail-with-body --cacert config/certs/ca/ca.crt -u "elastic:${ELASTIC_PASSWORD}" -X "$method"
+  local args=(-sS --fail-with-body --cacert config/certs/ca/ca.crt -K - -X "$method"
               -H 'Content-Type: application/json' "https://localhost:9200${path}")
   [[ -n $body ]] && args+=(-d "$body")
-  compose exec -T es01 curl "${args[@]}"
+  auth_cfg | compose exec -T es01 curl "${args[@]}"
 }
 # jq from the setup image, so the host needs no extra packages.
 jqc() { docker run --rm -i --entrypoint jq moat-setup:local "$@"; }
@@ -109,6 +111,18 @@ cmd_preflight() {
     local lid; lid=$(grep -hE '^\s*HandleLidSwitch(ExternalPower)?=' /etc/systemd/logind.conf /etc/systemd/logind.conf.d/*.conf 2>/dev/null | tail -1 || true)
     if [[ $lid == *ignore* ]]; then ok "lid close ignored ($lid)"
     else warn "closing the lid will suspend the SOC — see docs/laptop-test.md"; fi
+  fi
+
+  # Ports bind to BIND_IP. If that address sits on Wi-Fi it may not exist yet when Docker
+  # starts at boot, and the containers that publish ports then fail to start.
+  local bind_ip=""; [[ -f $ENV_FILE ]] && bind_ip=$(sed -n 's/^BIND_IP=//p' "$ENV_FILE")
+  if [[ -n $bind_ip ]]; then
+    local bind_if; bind_if=$(ip -o -4 addr show | awk -v ip="$bind_ip" '{split($4,a,"/")} a[1]==ip {print $2; exit}')
+    if [[ -n $bind_if && -d /sys/class/net/$bind_if/wireless && $(sysctl -n net.ipv4.ip_nonlocal_bind) == 0 ]]; then
+      hdr "Boot"
+      warn "BIND_IP $bind_ip is on Wi-Fi ($bind_if); after a reboot services may start before it has an address. Fix:"
+      echo "      echo 'net.ipv4.ip_nonlocal_bind=1' | sudo tee /etc/sysctl.d/99-moat-bind.conf && sudo sysctl --system"
+    fi
   fi
 
   echo

@@ -6,13 +6,30 @@ jobs:
   lint:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      # Pinned by commit SHA (v7.0.1): a moved tag can't change what runs here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: shellcheck
-        run: shellcheck -x -P setup/scripts moat setup/scripts/*.sh
-      - name: compose config
+        run: shellcheck -x -P setup/scripts moat setup/scripts/*.sh sensors/*/run.sh tests/*.sh
+      - name: compose config (all profiles)
         run: |
           cp .env.example .env
-          sed -i 's/^HOST_IP=.*/HOST_IP=192.0.2.10/; s/^BIND_IP=.*/BIND_IP=192.0.2.10/' .env
-          docker compose --env-file .env config -q
-      - name: caddyfile syntax
-        run: docker run --rm -v "$PWD/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.10 caddy adapt --config /etc/caddy/Caddyfile --validate=false > /dev/null
+          sed -i 's/^HOST_IP=.*/HOST_IP=192.0.2.10/; s/^BIND_IP=.*/BIND_IP=192.0.2.10/; s/^SENSOR_IFACE=.*/SENSOR_IFACE=eth9/' .env
+          docker compose --env-file .env --profile sensor config -q
+      - name: caddyfile
+        run: docker run --rm -v "$PWD/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.11.4 caddy adapt --config /etc/caddy/Caddyfile --validate=false > /dev/null
+      - name: moat rules are valid JSON with a rule_id
+        run: for f in rules/*.json; do jq -e '.rule_id and .name and .type' "$f" > /dev/null || { echo "bad: $f"; exit 1; }; done
+      - name: python compiles
+        run: python3 -m py_compile dashboards/*.py tests/*.py
+      - name: dashboard ndjson matches its generator
+        run: |
+          python3 dashboards/build_home_network.py
+          git diff --exit-code dashboards/
+  sensors:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: zeek policy parses
+        run: |
+          v=$(sed -n 's/^ZEEK_VERSION=//p' .env.example)
+          docker run --rm -v "$PWD/sensors/zeek:/sensor:ro" --entrypoint zeek "zeek/zeek:$v" -a /sensor/moat.zeek

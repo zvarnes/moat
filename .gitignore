@@ -3,3 +3,5 @@
 *.key
 *.pcap
 /backups/
+tests/out/
+__pycache__/
