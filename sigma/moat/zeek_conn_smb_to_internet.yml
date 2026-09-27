@@ -1,0 +1,41 @@
+# Network-flow rule: uses Zeek's conn.log (one record per connection).
+title: SMB connection from the LAN to the internet
+id: 272a74ef-1d8f-4ec5-ad23-fa0d87e5eca4
+status: experimental
+description: |
+  A device on your network opened an SMB (Windows file sharing, TCP 445) connection
+  to an address outside your private networks. SMB should never leave a home
+  network; this can mean credential leakage (NTLM hashes sent to an attacker's
+  server) or data being copied out.
+references:
+  - https://attack.mitre.org/techniques/T1048/
+author: moat
+date: 2026-09-27
+tags:
+  - attack.exfiltration
+  - attack.t1048
+  - attack.credential-access
+logsource:
+  product: zeek
+  service: conn
+detection:
+  # Zeek names: id.orig_h = who started the connection, id.resp_h / id.resp_p =
+  # who answered and on which port. moat maps them to source.ip / destination.*.
+  selection:
+    id.resp_p: 445
+    # |cidr matches IP ranges.
+    id.orig_h|cidr:
+      - '10.0.0.0/8'
+      - '172.16.0.0/12'
+      - '192.168.0.0/16'
+  # A named block you can exclude from the selection.
+  private_destination:
+    id.resp_h|cidr:
+      - '10.0.0.0/8'
+      - '172.16.0.0/12'
+      - '192.168.0.0/16'
+      - '127.0.0.0/8'
+  condition: selection and not private_destination
+falsepositives:
+  - Rare. Some cloud file services over SMB (e.g. Azure Files) if you use them
+level: medium

@@ -1,0 +1,42 @@
+# A Sigma rule is YAML with four parts that matter: what it's called (title/id),
+# where the data comes from (logsource), what to look for (detection), and how bad
+# a hit is (level). moat converts it to an Elastic query at bootstrap.
+# Try it:  ./moat rules test sigma/moat/dns_dynamic_dns_provider.yml
+title: DNS lookup of a dynamic DNS provider
+# Unique and permanent: moat installs this as rule_id "moat-sigma-<id>".
+id: 22657a34-3f96-4ceb-a986-f78227d056b2
+status: experimental
+description: |
+  A device looked up a hostname under a free dynamic-DNS provider. Malware and
+  phishing kits use these to point at infrastructure that changes IP often. Many
+  are legitimate (home servers, cameras), so check which device asked and why.
+references:
+  - https://attack.mitre.org/techniques/T1568/
+author: moat
+date: 2026-09-27
+tags:
+  - attack.command-and-control
+  - attack.t1568
+# product: zeek + service: dns means "Zeek's dns.log". The ecs_zeek_beats pipeline
+# turns that into event.dataset:zeek.dns and maps field names to ECS.
+logsource:
+  product: zeek
+  service: dns
+detection:
+  # "query" is Zeek's field name; it becomes dns.question.name in Elastic.
+  # |endswith is a modifier: match the end of the value.
+  selection:
+    query|endswith:
+      - '.duckdns.org'
+      - '.no-ip.com'
+      - '.no-ip.org'
+      - '.ddns.net'
+      - '.hopto.org'
+      - '.zapto.org'
+      - '.dynu.net'
+      - '.freedns.afraid.org'
+  condition: selection
+falsepositives:
+  - Your own home services (NAS, cameras) registered with a dynamic DNS provider
+# informational/low install disabled; medium and above install enabled.
+level: medium

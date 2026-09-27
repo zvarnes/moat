@@ -1,0 +1,31 @@
+# moat local Suricata rules: your own network signatures, loaded alongside ET Open.
+#
+# Anatomy:  action proto src sport -> dst dport (options;)
+#   e.g.  action=alert  proto=tls  src=$HOME_NET any  dst=$EXTERNAL_NET 443
+#         options=(msg:"..."; tls.sni; content:"x"; sid:<unique>; rev:1;)
+#   (Careful: suricata-update reads any commented line that *looks like* a rule as a
+#    disabled rule, and a duplicate sid silently replaces your real one.)
+#   - $HOME_NET comes from LOCAL_NETS in .env; $EXTERNAL_NET is everything else.
+#   - Sticky buffers (http.uri, tls.sni, dns.query, ...) pick which part of the
+#     traffic the following content: matches work on.
+#   - priority:1 = high, 2 = medium, 3 = low. moat alerts on 1-2 (see rules/).
+#   - sid: use 9000000-9999999 for local rules; bump rev: whenever you edit one.
+#
+# Check syntax:  ./moat rules test      Apply:  ./moat rules apply
+# Docs: https://docs.suricata.io/en/latest/rules/
+
+# End-to-end test of sensor -> Suricata -> Elasticsearch -> alert. Safe to trigger:
+#   curl http://example.com/moat-test-canary
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"moat TEST sensor canary (safe to trigger)"; flow:established,to_server; http.uri; content:"/moat-test-canary"; classtype:misc-activity; priority:1; sid:9000001; rev:1;)
+
+# TLS to a free dynamic-DNS host: the encrypted-traffic twin of the Sigma rule
+# sigma/moat/dns_dynamic_dns_provider.yml (Suricata sees the name in the TLS SNI).
+alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"moat TLS connection to a dynamic DNS provider"; flow:established,to_server; tls.sni; pcre:"/\.(duckdns\.org|no-ip\.(com|org)|ddns\.net|hopto\.org|zapto\.org|dynu\.net)$/i"; classtype:bad-unknown; priority:2; sid:9000002; rev:1;)
+
+# Templates: remove the leading "# " to enable, then ./moat rules apply.
+#
+# Flag a specific device talking to a service it shouldn't (replace the IP):
+# alert tls 192.168.1.50 any -> $EXTERNAL_NET any (msg:"moat camera talking to Telegram"; flow:established,to_server; tls.sni; content:"api.telegram.org"; endswith; priority:2; sid:9000100; rev:1;)
+#
+# Watch for a DNS name you care about (e.g. from a threat report):
+# alert dns $HOME_NET any -> any any (msg:"moat DNS lookup of watched domain"; dns.query; content:"example-bad.test"; nocase; endswith; priority:1; sid:9000101; rev:1;)

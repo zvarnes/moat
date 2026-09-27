@@ -10,11 +10,22 @@ HOST_NAME=${HOST_NAME:-moat.local}
 
 mkdir -p /certs/ca /certs/public /config
 
+# keyUsage is required on a CA by strict RFC 5280 verifiers (Python 3.13+, among others).
+CA_SUBJ="/O=moat/CN=moat local CA"
+CA_KU="keyUsage=critical,keyCertSign,cRLSign"
 if [[ ! -f /certs/ca/ca.key ]]; then
   log "creating local CA"
-  openssl req -x509 -new -nodes -newkey rsa:4096 -sha256 -days 3650 \
-    -subj "/O=moat/CN=moat local CA" \
+  openssl req -x509 -new -nodes -newkey rsa:4096 -sha256 -days 3650 -subj "$CA_SUBJ" \
+    -addext "basicConstraints=critical,CA:TRUE" -addext "$CA_KU" \
     -keyout /certs/ca/ca.key -out /certs/ca/ca.crt 2>/dev/null
+elif ! openssl x509 -in /certs/ca/ca.crt -noout -ext keyUsage 2>/dev/null | grep -q 'Certificate Sign'; then
+  # Older moat CAs lack keyUsage. Re-issue the CA *certificate* with the same key and
+  # subject: every cert it signed, and every agent that trusts it, keeps working. Only
+  # the fingerprint changes, and it is re-rendered into kibana.yml below.
+  log "re-issuing CA certificate with keyUsage (same key; existing trust is kept)"
+  cp /certs/ca/ca.crt /certs/ca/ca.crt.pre-keyusage
+  openssl req -x509 -new -key /certs/ca/ca.key -sha256 -days 3650 -subj "$CA_SUBJ" \
+    -addext "basicConstraints=critical,CA:TRUE" -addext "$CA_KU" -out /certs/ca/ca.crt 2>/dev/null
 fi
 
 issue() { # issue NAME DNS1,DNS2,...
@@ -29,7 +40,7 @@ issue() { # issue NAME DNS1,DNS2,...
     -keyout "$dir/$name.key" -out "$dir/$name.csr" 2>/dev/null
   openssl x509 -req -in "$dir/$name.csr" -CA /certs/ca/ca.crt -CAkey /certs/ca/ca.key \
     -CAcreateserial -days 825 -sha256 -out "$dir/$name.crt" \
-    -extfile <(printf 'subjectAltName=%s\nextendedKeyUsage=serverAuth,clientAuth\n' "$san") 2>/dev/null
+    -extfile <(printf 'subjectAltName=%s\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth,clientAuth\n' "$san") 2>/dev/null
   rm -f "$dir/$name.csr"
 }
 

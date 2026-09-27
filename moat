@@ -194,7 +194,17 @@ cmd_init() {
 cmd_up() {
   load_env
   hdr "Starting moat (first run pulls ~3 GB of images and takes 5–10 minutes)"
+  # certs re-renders kibana.yml on every up; Kibana only reads it at start. Restart
+  # Kibana when the rendered file changed (e.g. HOST_IP, CA fingerprint, Fleet config).
+  local kcfg_before kcfg_after
+  kcfg_before=$(kibana_cfg_hash)
   compose up -d --build --wait --wait-timeout 1200 es01 kibana caddy
+  kcfg_after=$(kibana_cfg_hash)
+  if [[ -n $kcfg_before && $kcfg_before != "$kcfg_after" ]]; then
+    ok "kibana.yml changed; restarting Kibana to load it"
+    compose restart kibana >/dev/null
+    compose up -d --wait --wait-timeout 600 kibana
+  fi
   # Waits on bootstrap (Fleet, Defend, rules), then on Fleet Server reporting HEALTHY.
   compose up -d --wait --wait-timeout 600 fleet-server || true
   local rc; rc=$(compose ps -a bootstrap --format '{{.ExitCode}}' 2>/dev/null || echo "?")
@@ -215,6 +225,11 @@ cmd_up() {
   printf '%sReady.%s Kibana: https://%s%s\n' "$G" "$N" "$HOST_IP" "$([[ $KIBANA_PORT == 443 ]] || echo ":$KIBANA_PORT")"
   echo "  Log in as 'analyst' (password: ./moat creds). Browser will warn about the local CA — see docs."
   echo "  Enroll endpoints: ./moat enroll"
+}
+# sha256 of the rendered kibana.yml in the kibana-config volume ("" before first run).
+kibana_cfg_hash() {
+  docker run --rm -v moat_kibana-config:/c:ro --entrypoint sh moat-setup:local \
+    -c 'sha256sum /c/kibana.yml 2>/dev/null | cut -d" " -f1' 2>/dev/null || true
 }
 cmd_down()      { load_env; compose down; }
 cmd_logs()      { load_env; compose logs -f --tail=100 "$@"; }
@@ -309,6 +324,53 @@ cmd_sensor_prep() {
   echo "  Persist across reboots:   see docs/sensors/unifi-port-mirror.md (systemd unit)"
 }
 
+# ---------------------------------------------------------------- rules
+# test [PATH]: convert Sigma (prints each rule's Elastic query), syntax-check Suricata
+#              local.rules and moat's JSON rules. Nothing is installed.
+# apply:       install everything (bootstrap) and live-reload Suricata's rules.
+cmd_rules() {
+  local sub=${1:-}; shift || true
+  case $sub in
+    test)
+      load_env
+      local target=${1:-sigma/moat} fail=0
+      [[ -e $target ]] || die "no such file or directory: $target"
+      hdr "Sigma → Elastic ($target)"
+      docker run --rm -v "$ROOT/sigma:/sigma:ro" -v "$ROOT/$target:/check:ro" \
+        --entrypoint /opt/sigma/bin/python moat-setup:local /setup/sigma_convert.py --strict --show /check \
+        || fail=1
+      hdr "Suricata local.rules"
+      docker run --rm -v "$ROOT/sensors/suricata:/sensor:ro" --entrypoint sh \
+        "jasonish/suricata:${SURICATA_VERSION:-8.0.7}" -c \
+        'cp -a /etc/suricata.dist/. /etc/suricata/ || exit 1
+         out=$(suricata -T -v -c /etc/suricata/suricata.yaml -S /sensor/local.rules -l /tmp 2>&1); rc=$?
+         printf "%s\n" "$out" | grep -E "rules successfully loaded|Error|E: "
+         exit $rc' \
+        || fail=1
+      # suricata-update treats rule-shaped comments as disabled rules; a duplicate sid
+      # (even in a comment) silently replaces the real rule.
+      local dup; dup=$(grep -oE 'sid: *[0-9]+' sensors/suricata/local.rules | tr -d ' ' | sort | uniq -d)
+      if [[ -n $dup ]]; then bad "duplicate $dup in local.rules (comments count)"; fail=1; else ok "local.rules sids unique"; fi
+      hdr "moat JSON rules (rules/)"
+      local f
+      for f in rules/*.json; do
+        if jqc -e '.rule_id and .name and .type and .query' <"$f" >/dev/null; then ok "$f"; else bad "$f"; fail=1; fi
+      done
+      echo; if (( fail == 0 )); then ok "all rules valid"; else die "rule check failed"; fi
+      ;;
+    apply)
+      load_env
+      cmd_bootstrap
+      if compose ps --format '{{.Service}}' 2>/dev/null | grep -qx suricata; then
+        hdr "Reloading Suricata rules"
+        compose exec -T suricata sh -c 'suricata-update --no-test --no-reload -q --disable-conf /sensor/disable.conf --local /sensor/local.rules && kill -USR2 1' \
+          && ok "Suricata rules updated and reloaded"
+      fi
+      ;;
+    *) die "usage: ./moat rules test [path] | apply";;
+  esac
+}
+
 usage() {
   cat <<EOF
 ${B}moat${N} — a home SOC for threat hunting
@@ -321,6 +383,8 @@ ${B}moat${N} — a home SOC for threat hunting
   creds                Show Kibana URL and passwords
   logs [service]       Follow logs
   bootstrap            Re-run Fleet/Defend/rules bootstrap
+  rules test [path]    Check Sigma, Suricata local.rules and rules/*.json (shows Elastic queries)
+  rules apply          Install detection rules and live-reload Suricata
   sensor-prep [iface]  Put the sensor NIC in capture mode (sudo)
   down                 Stop the stack (keeps data)
   destroy              Stop and delete all data + certs
@@ -339,6 +403,7 @@ main() {
     creds) cmd_creds;;
     logs) cmd_logs "$@";;
     bootstrap) cmd_bootstrap;;
+    rules) cmd_rules "$@";;
     sensor-prep) cmd_sensor_prep "$@";;
     destroy) cmd_destroy;;
     help|-h|--help) usage;;

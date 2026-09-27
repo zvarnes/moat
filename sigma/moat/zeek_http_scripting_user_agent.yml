@@ -1,0 +1,37 @@
+# Hunting-grade rule: level "low", so moat installs it DISABLED. Turn it on in
+# Security → Rules when you want to hunt, or raise the level to medium.
+title: Plain-HTTP request from a scripting tool to the internet
+id: 64e0a359-bf8b-4609-9e8c-b278f6b0216b
+status: experimental
+description: |
+  An unencrypted HTTP request with a scripting/tool user agent (curl, wget, Python,
+  Go) went to the internet. Droppers and IoT malware often fetch payloads this way.
+  Developers and update scripts do too, so it's noisy on a dev machine.
+references:
+  - https://attack.mitre.org/techniques/T1105/
+author: moat
+date: 2026-09-27
+tags:
+  - attack.command-and-control
+  - attack.t1105
+logsource:
+  product: zeek
+  service: http
+detection:
+  selection:
+    # |startswith matches the beginning of the value; a list means "any of".
+    user_agent|startswith:
+      - 'curl/'
+      - 'Wget/'
+      - 'python-requests/'
+      - 'Python-urllib/'
+      - 'Go-http-client/'
+  private_destination:
+    id.resp_h|cidr:
+      - '10.0.0.0/8'
+      - '172.16.0.0/12'
+      - '192.168.0.0/16'
+  condition: selection and not private_destination
+falsepositives:
+  - Package managers, update scripts and developers testing APIs
+level: low

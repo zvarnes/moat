@@ -1,0 +1,3 @@
+sigma-cli==3.1.0
+# Regenerate the lock: see setup/Dockerfile (pip-compile --generate-hashes).
+pySigma-backend-elasticsearch==2.1.1

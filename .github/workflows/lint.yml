@@ -20,7 +20,7 @@ jobs:
       - name: moat rules are valid JSON with a rule_id
         run: for f in rules/*.json; do jq -e '.rule_id and .name and .type' "$f" > /dev/null || { echo "bad: $f"; exit 1; }; done
       - name: python compiles
-        run: python3 -m py_compile dashboards/*.py tests/*.py
+        run: python3 -m py_compile dashboards/*.py tests/*.py setup/scripts/*.py
       - name: dashboard ndjson matches its generator
         run: |
           python3 dashboards/build_home_network.py
@@ -33,3 +33,15 @@ jobs:
         run: |
           v=$(sed -n 's/^ZEEK_VERSION=//p' .env.example)
           docker run --rm -v "$PWD/sensors/zeek:/sensor:ro" --entrypoint zeek "zeek/zeek:$v" -a /sensor/moat.zeek
+      - name: suricata local.rules load
+        run: |
+          v=$(sed -n 's/^SURICATA_VERSION=//p' .env.example)
+          docker run --rm -v "$PWD/sensors/suricata:/sensor:ro" --entrypoint sh "jasonish/suricata:$v" -c \
+            'cp -a /etc/suricata.dist/. /etc/suricata/ && suricata -T -v -c /etc/suricata/suricata.yaml -S /sensor/local.rules -l /tmp'
+      - name: local.rules sids unique (comments included)
+        run: test -z "$(grep -oE 'sid: *[0-9]+' sensors/suricata/local.rules | tr -d ' ' | sort | uniq -d)"
+      - name: sigma rules convert (strict)
+        run: |
+          docker build -q -t moat-setup:ci setup
+          docker run --rm -v "$PWD/sigma:/sigma:ro" --entrypoint /opt/sigma/bin/python moat-setup:ci \
+            /setup/sigma_convert.py --strict --show /sigma/moat

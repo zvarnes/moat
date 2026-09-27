@@ -216,6 +216,44 @@ for f in /rules/*.json; do
   fi
 done
 
+# --- Sigma rules: sigma/moat (ours) + optional pinned SigmaHQ network pack ---
+# sigma_convert.py maps fields (ecs_zeek_beats + sigma/pipelines/moat.yml), skips rules
+# moat has no data for or that would reference unmapped fields, and keeps whatever
+# enabled/disabled state a user already chose in Kibana.
+sigma_import() { # sigma_import SOURCE [--disabled] PATH...
+  local src=$1; shift
+  local keep ndj res dir
+  # Kibana's import wants a *.ndjson filename; BusyBox mktemp has no --suffix.
+  dir=$(mktemp -d); keep=$dir/enabled.json; ndj=$dir/sigma.ndjson
+  kb GET "/api/detection_engine/rules/_find?per_page=1000&filter=alert.attributes.tags:%22Sigma%3A%20${src}%22" \
+    | jq '[.data[] | {(.rule_id): .enabled}] | add // {}' > "$keep"
+  /opt/sigma/bin/python /setup/sigma_convert.py --source "$src" --keep-enabled "$keep" "$@" > "$ndj" \
+    2> >(while IFS= read -r l; do log "  $l" >&2; done)  # >&2: this subshell's stdout is $ndj
+  if [[ -s $ndj ]]; then
+    res=$(curl -sS --cacert "$CA" -K <(auth_cfg) -H 'kbn-xsrf: moat' \
+          -X POST "${KIBANA_URL}/api/detection_engine/rules/_import?overwrite=true" -F "file=@${ndj}")
+    log "sigma[${src}]: imported $(jq -r '.success_count // 0' <<<"$res") rule(s)"
+    jq -r '.errors[]? | "  import error \(.rule_id): \(.error.message)"' <<<"$res" | while IFS= read -r l; do log "$l"; done
+  fi
+  rm -rf "$dir"
+}
+sigma_import moat /sigma/moat
+
+if [[ ${SIGMA_COMMUNITY:-network} == network ]]; then
+  rel=${SIGMA_RELEASE:-r2026-07-01}
+  tmp=$(mktemp -d)
+  if curl -fsSL "https://github.com/SigmaHQ/sigma/archive/refs/tags/${rel}.tar.gz" -o "$tmp/s.tgz" \
+     && echo "${SIGMA_RELEASE_SHA256:-}  $tmp/s.tgz" | sha256sum -c -s; then
+    tar xzf "$tmp/s.tgz" -C "$tmp" --strip-components=1 \
+      "sigma-${rel}/rules/network/zeek" "sigma-${rel}/rules/network/dns" 2>/dev/null
+    log "SigmaHQ ${rel} (DRL 1.1): community rules install disabled; enable them in Security > Rules"
+    sigma_import sigmahq --disabled "$tmp/rules/network"
+  else
+    log "WARN: SigmaHQ ${rel} download failed or checksum mismatch; community Sigma rules skipped"
+  fi
+  rm -rf "$tmp"
+fi
+
 # --- Single-node housekeeping (last, after everything that creates indices) ---
 # Security's value-list data streams use Kibana-managed templates with no @custom hook
 # and default to 1 replica. Patch the templates (re-applied every run, in case a Kibana

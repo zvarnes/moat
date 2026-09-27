@@ -99,6 +99,7 @@ services:
       - tokens:/tokens
       - ./rules:/rules:ro
       - ./dashboards:/dashboards:ro
+      - ./sigma:/sigma:ro
 
   fleet-server:
     image: docker.elastic.co/elastic-agent/elastic-agent:${STACK_VERSION}

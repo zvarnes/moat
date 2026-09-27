@@ -1,0 +1,39 @@
+# moat field fixes, applied before pySigma's ecs_zeek_beats pipeline.
+# Upstream maps a few Zeek fields to names the Elastic zeek integration doesn't
+# produce (wildcards, raw id.* names). Fix them here; sigma_convert.py skips any rule
+# that still ends up with an unmapped field. Test with: ./moat rules test
+name: moat field fixes for the Elastic zeek integration
+priority: 10
+transformations:
+  - id: zeek_conn_ids
+    type: field_name_mapping
+    mapping:
+      id.orig_h: source.ip
+      id.resp_h: destination.ip
+      id.orig_p: source.port
+      id.resp_p: destination.port
+  - id: smb_path
+    type: field_name_mapping
+    mapping:
+      path: zeek.smb_files.path
+    rule_conditions:
+      - type: logsource
+        product: zeek
+        service: smb_files
+  - id: kerberos
+    type: field_name_mapping
+    mapping:
+      cipher: zeek.kerberos.cipher
+      service: zeek.kerberos.service
+    rule_conditions:
+      - type: logsource
+        product: zeek
+        service: kerberos
+  - id: http_user_agent
+    type: field_name_mapping
+    mapping:
+      user_agent: user_agent.original
+    rule_conditions:
+      - type: logsource
+        product: zeek
+        service: http
