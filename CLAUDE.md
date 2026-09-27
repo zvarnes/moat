@@ -12,8 +12,8 @@ moat is a free, single-host home SOC for threat hunting: Elastic Security (SIEM)
 - Phase 1 (core SIEM) **runs live** on the test laptop (Elastic 9.5.4). A clean `./moat destroy` then `./moat up` reaches a green cluster with Fleet Server online in about 5 minutes and needs no manual steps.
 - Phase 2 (network sensing) **runs live** as of 2026-09-27: Zeek + Suricata on the mirror, shipped through the `moat-sensor` agent. There are 0 ingest errors across 16 datasets, and Suricata alerts reach Security alerts via the External Alerts rule.
 - Not yet exercised: enrolling an external endpoint via `./moat enroll`.
-- UDM Pro syslog: the `cef` integration on the Sensor policy listens on UDP 5514 (published on `BIND_IP:${SYSLOG_PORT}`). A synthetic CEF event parsed cleanly; real UDM events have not been checked yet.
-- **Next:** check real UDM events parse (UniFi may also send non-CEF lines), measure GB/day after a full day, tune Suricata noise.
+- UDM Pro syslog: the `cef` integration on the Sensor policy listens on UDP 5514 (published on `BIND_IP:${SYSLOG_PORT}`). Verified live 2026-09-27: UniFi OS 5.1.33 sends CEF (`observer.product: UniFi OS`, UniFi fields under `cef.extensions.UNIFI*`) with 0 parse errors. UniFi's syslog setting is a single Mode (internal/external), so it's either/or. Firewall events only arrive for rules with logging enabled.
+- **Next:** measure GB/day after a full day, tune Suricata noise, and check that firewall/threat CEF events parse once some arrive.
 
 ## Architecture (compose.yml, project name `moat`)
 
@@ -81,7 +81,7 @@ Ports 443 / 8220 / 9200 bind to `BIND_IP` (= HOST_IP). Secrets live only in `.en
 ## Roadmap
 
 - **Phase 2:** done: Zeek + Suricata + sensor agent, network rule defaults, 7-day ILM.
-  - Remaining: verify real UDM syslog, endpoint ILM (30d) once endpoints exist, and GB/day measurement.
+  - Remaining: endpoint ILM (30d) once endpoints exist, and GB/day measurement.
 - **Phase 3:** moat rule pack in `rules/` (TOML, detection-rules format), dashboards, guided labs with Atomic Red Team and PCAPs, `make test-rules`.
 - **Phase 4:** lite-profile polish, backup/restore, docs site, v1.0.
 
