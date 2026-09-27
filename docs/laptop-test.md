@@ -32,9 +32,13 @@ sudo sysctl --system
 sudo mkdir -p /etc/systemd/logind.conf.d
 printf '[Login]\nHandleLidSwitch=ignore\nHandleLidSwitchExternalPower=ignore\nHandleLidSwitchDocked=ignore\n' \
   | sudo tee /etc/systemd/logind.conf.d/moat.conf
-sudo systemctl restart systemd-logind
-# Desktop only: stop idle suspend
+# Masking the sleep targets makes suspend impossible right away, so there's no need to
+# restart systemd-logind (doing so on a desktop kills your graphical session).
+# The lid setting above applies from the next boot.
 sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+# Desktop only: stop GNOME's idle-suspend timer (run as your user, not root)
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing'
 ```
 
 Keep it on AC power; Elasticsearch doesn't like surprise shutdowns.

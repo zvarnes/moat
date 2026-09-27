@@ -11,7 +11,7 @@ moat is a free, single-host home SOC for threat hunting: Elastic Security (SIEM)
 
 - Phase 1 (core SIEM) **runs live** on the test laptop (Elastic 9.5.4). A clean `./moat destroy` then `./moat up` reaches a green cluster with Fleet Server online in about 5 minutes and needs no manual steps.
 - Not yet exercised: enrolling an external endpoint via `./moat enroll`.
-- **Next:** Phase 2 network sensing, once the USB-C NIC is receiving the mirror.
+- **Next:** Phase 2 network sensing. The mirror is live on `enp0s31f6` and verified with a promiscuous capture.
 
 ## Architecture (compose.yml, project name `moat`)
 
@@ -34,7 +34,10 @@ Ports 443 / 8220 / 9200 bind to `BIND_IP` (= HOST_IP). Secrets live only in `.en
 
 ## Test rig
 
-- This laptop: built-in Ethernet = management (`HOST_IP`, should have a DHCP reservation); USB-C Ethernet = sensor NIC fed by a UniFi port mirror from the UDM Pro.
+- This laptop: Wi-Fi `wlp114s0` = management, `HOST_IP=<HOST_IP>` via a UniFi fixed-IP reservation (Wi-Fi power save off). Built-in Ethernet `enp0s31f6` = sensor (`SENSOR_IFACE`), NetworkManager profile with IPv4/IPv6 disabled, fed by a UniFi mirror of the switch↔UDM Pro uplink.
+- The mirror sees two subnets: the main LAN and a second VLAN/subnet. Treat both as local (Zeek `Site::local_nets`, Suricata `HOME_NET`). It's pre-NAT, so internal IPs are visible. It can't see WAN-side traffic, devices on the UDM's own ports, or intra-switch east-west traffic. Plan UDM syslog to cover some of that.
+- Measured 2026-09-26: ~6,200 pkt/s on the mirror, ~29 LAN hosts.
+- Remote access: Tailscale (`<tailnet-host>`, <tailscale-ip>). `tailscale serve` proxies https://<tailnet-host> → https+insecure://<HOST_IP>:443, and must be repointed if `HOST_IP` changes. OpenSSH is key-only, with keys from the owner's GitHub account. The tailnet is shared with another user.
 - Setup guides: `docs/laptop-test.md` and `docs/sensors/unifi-port-mirror.md`.
 
 ## Lessons from the first live run (don't regress these)
@@ -47,7 +50,7 @@ Ports 443 / 8220 / 9200 bind to `BIND_IP` (= HOST_IP). Secrets live only in `.en
 
 ## Open issues
 
-- `certs.sh` never reissues an existing cert, so a `HOST_IP` change (DHCP) needs manual cert rotation. The laptop is currently on Wi-Fi without a reservation.
+- `certs.sh` never reissues an existing cert, so a `HOST_IP` change needs a rebuild (`destroy` + `init --force`) or manual cert rotation.
 - The analyst role uses Kibana `base: ["all"]`. Tighten it to specific feature privileges (see `/api/security/features`).
 - `ENABLE_RULE_TAGS` enables 981 Defend-only rules, which stay idle without endpoints. Switch the defaults to network rules in Phase 2.
 - Caddy volume `subpath` needs Docker Engine 26+ / Compose 2.23+.
