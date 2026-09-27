@@ -1,6 +1,8 @@
 # Getting started: your first hour with moat
 
-This walks you from a fresh `./moat up` to triaging a real alert and opening a case. No prior SOC experience needed.
+This is the quick version. For the full hands-on course with safe practice exercises, follow the [tutorial](tutorial/README.md).
+
+It walks you from a fresh `./moat up` to triaging a real alert and opening a case. No prior SOC experience needed.
 
 ## 1. Log in
 
@@ -56,10 +58,10 @@ Kibana → **Security → Alerts**. For each alert, ask four questions:
 1. **Who?** `source.ip`. Match it to a device name in the dashboard's DHCP table.
 2. **What?** The rule name and `reason`. Open the alert (the ⤢ icon) for the full event.
 3. **Where?** `destination.ip` or domain. Is it a company you'd expect this device to talk to?
-4. **Normal?** Click **Investigate in timeline** and look at what else that device did around the same time.
+4. **Normal?** **Take action → Investigate in Timeline**, and look at what else that device did around the same time.
 
 Then decide:
-- **Benign:** close it. If it will keep happening, add a rule exception (alert menu → *Add rule exception*).
+- **Benign:** close it (**Take action → Mark as closed**). If it will keep happening, add a rule exception (**Take action → Add rule exception**).
 - **Suspicious:** escalate to a case (next step).
 
 ## 5. Work the case in IRIS
@@ -67,7 +69,7 @@ Then decide:
 Every medium-or-higher alert is already waiting in **IRIS → Alerts**. The bridge put it there with the IPs, domains and URLs as IOCs, and the device as an asset.
 
 - **Similar alerts** (on the alert page) shows other alerts sharing an IOC. It's your quickest "is this a pattern?" check.
-- **Escalate** turns one or more alerts into a **case**. There you get:
+- **Merge → Merge into a new case** (IRIS's word for escalating) turns one or more alerts into a **case**. There you get:
   - a timeline;
   - tasks you can assign;
   - notes and evidence;

@@ -24,7 +24,7 @@ git clone https://github.com/<you>/moat && cd moat
 
 Browse to `https://<HOST_IP>` and log in as `analyst` (`./moat creds`). Open **Dashboards → "moat: Home Network"** for the overview, or **Security → Alerts** for detections. Cases live in DFIR-IRIS at `https://<HOST_IP>:8443`.
 
-**New here? Start with [Getting started](docs/getting-started.md).**
+**New here? Follow the hands-on [tutorial](docs/tutorial/README.md)** (7 short chapters, safe `./moat lab` exercises), or skim [Getting started](docs/getting-started.md).
 
 For network sensing, mirror your router↔switch uplink to a spare NIC and set `SENSOR_IFACE` in `.env`. See [UniFi port mirroring](docs/sensors/unifi-port-mirror.md).
 
@@ -66,6 +66,7 @@ Run `./moat help`. Highlights:
 
 - `status`: health, agents, IRIS + bridge, event counts
 - `rules test [path]` / `rules apply`: check, then install Sigma, Suricata and Elastic rules
+- `lab canary|dyndns|threat-intel|cleanup`: safe triggers for practising (see the tutorial)
 - `bootstrap`: re-apply policies, rules and dashboards
 - `init --add-missing`: add settings new in an upgrade to your existing `.env`
 - `enroll`: agent install commands
@@ -74,6 +75,7 @@ Run `./moat help`. Highlights:
 
 ## Docs
 
+- **[Tutorial](docs/tutorial/README.md)**: hands-on, from first login to writing detections and a daily routine
 - [Getting started](docs/getting-started.md): your first hour, from login to a triaged alert and an IRIS case
 - [Hunting 101](docs/hunting-101.md): the data you have and queries to find what rules miss
 - [Writing detections](docs/writing-detections.md): Sigma, Suricata/Snort-style and Elastic rules; tuning noise

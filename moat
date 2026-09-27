@@ -434,6 +434,50 @@ cmd_rules() {
   esac
 }
 
+# ---------------------------------------------------------------- lab
+# Safe, repeatable triggers for the tutorial (docs/tutorial/). They run from this box,
+# so they're seen only if its own traffic crosses the mirror port; otherwise run the
+# printed command from any device on the mirrored network.
+LAB_TI_STREAM=logs-ti_moatlab.indicator-default
+cmd_lab() {
+  local sub=${1:-}; shift || true
+  load_env
+  local tag; tag=$(rand 6 | tr '[:upper:]' '[:lower:]')
+  case $sub in
+    canary)
+      hdr "Lab: Suricata sensor canary"
+      echo "  curl http://example.com/moat-test-canary"
+      curl -s -o /dev/null --max-time 10 http://example.com/moat-test-canary || true
+      ok "sent. Expect a HIGH alert \"moat TEST sensor canary\" in ~5 min (IRIS ~1 min later)"
+      ;;
+    dyndns)
+      hdr "Lab: dynamic-DNS lookup (Sigma rule)"
+      local name="moat-lab-$tag.duckdns.org"
+      echo "  nslookup $name   (no answer is fine; the lookup is what's detected)"
+      getent hosts "$name" >/dev/null 2>&1 || true
+      ok "looked up $name. Expect \"Sigma: DNS lookup of a dynamic DNS provider\" in ~5 min"
+      ;;
+    threat-intel)
+      hdr "Lab: threat-intel match (a harmless test indicator)"
+      local dom="moat-lab-$tag.example.com" now; now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      es POST "/${LAB_TI_STREAM}/_doc?refresh=true" "{\"@timestamp\":\"$now\",
+        \"event\":{\"kind\":\"enrichment\",\"category\":[\"threat\"],\"type\":[\"indicator\"]},
+        \"threat\":{\"indicator\":{\"type\":\"domain-name\",\"url\":{\"domain\":\"$dom\"},
+        \"provider\":\"moat lab\",\"description\":\"moat tutorial test indicator (harmless)\"}}}" >/dev/null \
+        || die "could not write the test indicator"
+      ok "listed $dom as 'malicious' in a lab feed ($LAB_TI_STREAM)"
+      getent hosts "$dom" >/dev/null 2>&1 || true
+      ok "looked it up. Expect \"moat: DNS lookup of a threat-intel domain: $dom\" in ~5 min"
+      echo "  When you're done: ./moat lab cleanup"
+      ;;
+    cleanup)
+      if es DELETE "/_data_stream/${LAB_TI_STREAM}" >/dev/null 2>&1; then ok "removed lab threat-intel indicators"
+      else ok "no lab indicators to remove"; fi
+      ;;
+    *) die "usage: ./moat lab canary | dyndns | threat-intel | cleanup   (see docs/tutorial/)";;
+  esac
+}
+
 usage() {
   cat <<EOF
 ${B}moat${N} — a home SOC for threat hunting
@@ -449,6 +493,7 @@ ${B}moat${N} — a home SOC for threat hunting
   bootstrap            Re-run Fleet/Defend/rules bootstrap
   rules test [path]    Check Sigma, Suricata local.rules and rules/*.json (shows Elastic queries)
   rules apply          Install detection rules and live-reload Suricata
+  lab <name>           Safe tutorial triggers: canary | dyndns | threat-intel | cleanup
   sensor-prep [iface]  Put the sensor NIC in capture mode (sudo)
   down                 Stop the stack (keeps data)
   destroy              Stop and delete all data + certs
@@ -468,6 +513,7 @@ main() {
     logs) cmd_logs "$@";;
     bootstrap) cmd_bootstrap;;
     rules) cmd_rules "$@";;
+    lab) cmd_lab "$@";;
     sensor-prep) cmd_sensor_prep "$@";;
     destroy) cmd_destroy;;
     help|-h|--help) usage;;

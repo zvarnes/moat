@@ -32,7 +32,7 @@ The bridge remembers what it sent, so restarts never create duplicates. Closing 
 ## Working an alert in IRIS
 
 1. **Alerts:** new alerts arrive with status *New*. Check **Similar alerts** for others that share an IOC or asset.
-2. **Escalate** one or more alerts into a **case**. Their IOCs and assets carry over.
+2. **Merge** one or more alerts into a **case** (**Merge → Merge into a new case**; IRIS's word for escalating). Their IOCs and assets carry over.
 3. In the case:
    - **Timeline:** what happened, in order.
    - **Tasks:** what to check, assigned to people.
