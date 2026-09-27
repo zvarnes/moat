@@ -10,6 +10,7 @@ moat is a free, single-host home SOC for threat hunting: Elastic Security (SIEM)
 ## Current state
 
 - Phase 1 (core SIEM) **runs live** on the test laptop (Elastic 9.5.4). A clean `./moat destroy` then `./moat up` reaches a green cluster with Fleet Server online in about 5 minutes and needs no manual steps.
+- A full from-scratch install was verified on 2026-09-27 (M1–M5 code) as an isolated second instance: git worktree, `COMPOSE_PROJECT_NAME=moatfresh`, lite + IRIS, alternate ports. `up` took 332 s, then green, with all rules, dashboard, IRIS and bridge in place, and the analyst + IRIS UI checks passing. This is the safe way to test fresh installs without destroying live data. Fleet Server can show `degraded` for the first ~10 min (pre-policy start-up noise) before going `online`.
 - Phase 2 (network sensing) **runs live** as of 2026-09-27: Zeek + Suricata on the mirror, shipped through the `moat-sensor` agent. There are 0 ingest errors across 16 datasets, and Suricata alerts reach Security alerts via the External Alerts rule.
 - Not yet exercised: enrolling an external endpoint via `./moat enroll`.
 - UDM Pro syslog: the `cef` integration on the Sensor policy listens on UDP 5514 (published on `BIND_IP:${SYSLOG_PORT}`). Verified live 2026-09-27: UniFi OS 5.1.33 sends CEF (`observer.product: UniFi OS`, UniFi fields under `cef.extensions.UNIFI*`) with 0 parse errors. UniFi's syslog setting is a single Mode (internal/external), so it's either/or. Firewall events only arrive for rules with logging enabled.

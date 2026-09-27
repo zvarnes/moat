@@ -1,6 +1,7 @@
 """Log into DFIR-IRIS through Caddy and check the alerts page renders.
 Run via tests/ui-check.sh iris. Screenshots land in tests/out/."""
 import os
+import re
 import sys
 
 from playwright.sync_api import sync_playwright
@@ -19,7 +20,9 @@ with sync_playwright() as p:
     pg.goto(f"{BASE}/alerts", wait_until="networkidle")
     pg.wait_for_timeout(4000)
     pg.screenshot(path="/out/iris-alerts.png", full_page=False)
+    # The header reads "<n> Alerts" ("0 Alert" when empty); a fresh install legitimately has 0.
+    header = pg.get_by_text(re.compile(r"^\s*\d+ Alerts?\s*$")).count()
     rows = pg.locator("[id^='alertCard-'], .alert-card, #alertsList .card").count()
-    print(f"{'ok' if rows else 'FAIL':4} alerts     {rows} alert cards visible")
+    print(f"{'ok' if header else 'FAIL':4} alerts     page loaded, {rows} alert cards visible")
     b.close()
-    sys.exit(0 if ok and rows else 1)
+    sys.exit(0 if ok and header else 1)
