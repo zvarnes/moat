@@ -6,7 +6,7 @@ description: |
   A device on your network opened an SMB (Windows file sharing, TCP 445) connection
   to an address outside your private networks. SMB should never leave a home
   network; this can mean credential leakage (NTLM hashes sent to an attacker's
-  server) or data being copied out.
+  server) or data being copied out. Failed attempts (no reply) are ignored.
 references:
   - https://attack.mitre.org/techniques/T1048/
 author: moat
@@ -35,7 +35,18 @@ detection:
       - '172.16.0.0/12'
       - '192.168.0.0/16'
       - '127.0.0.0/8'
-  condition: selection and not private_destination
+  # Only connections the server actually answered. A lone unanswered SYN (state S0) is
+  # a failed attempt; a work laptop trying a corporate file share from home does this
+  # daily and moves no data. S1/SF/S2/S3 = established; RSTO/RSTR = established then reset.
+  established:
+    conn_state:
+      - 'S1'
+      - 'SF'
+      - 'S2'
+      - 'S3'
+      - 'RSTO'
+      - 'RSTR'
+  condition: selection and established and not private_destination
 falsepositives:
   - Rare. Some cloud file services over SMB (e.g. Azure Files) if you use them
 level: medium

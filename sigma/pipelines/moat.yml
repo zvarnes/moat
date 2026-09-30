@@ -12,6 +12,14 @@ transformations:
       id.resp_h: destination.ip
       id.orig_p: source.port
       id.resp_p: destination.port
+  - id: zeek_conn_state
+    type: field_name_mapping
+    mapping:
+      conn_state: zeek.connection.state
+    rule_conditions:
+      - type: logsource
+        product: zeek
+        service: conn
   - id: smb_path
     type: field_name_mapping
     mapping:
