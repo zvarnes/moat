@@ -43,6 +43,7 @@ The bridge remembers what it sent, so restarts never create duplicates. Closing 
 ## Enrichment
 
 - **VirusTotal:** put a free key in `.env` as `VT_API_KEY`, then `./moat up`. The bridge configures IRIS's VirusTotal module for you. The free public API allows about 500 lookups a day, which is plenty for a home SOC.
+- **Censys:** put a free Personal Access Token in `.env` as `CENSYS_API_KEY`, then `./moat up`. External IPs in an alert get a one-line "owner, open ports, services" summary on the IOC in IRIS. The free tier is 100 lookups a month, so results are cached and capped; see [threat-intel.md](threat-intel.md).
 - **MISP:** IRIS's MISP module is installed. Configure it in IRIS → Advanced → Modules if you run a MISP instance.
 
 ## Users

@@ -329,7 +329,7 @@ services:
     restart: unless-stopped
 
   # Forwards open Security alerts into IRIS as alerts (with IOCs + device names), and
-  # configures IRIS integrations (customer, VirusTotal). Stdlib Python, non-root, read-only.
+  # configures IRIS integrations (customer, VirusTotal) and adds Censys context to external IPs. Stdlib Python, non-root, read-only.
   bridge:
     build: ./bridge
     image: moat-bridge:local
@@ -347,6 +347,9 @@ services:
       - KIBANA_PUBLIC_URL=${KIBANA_PUBLIC_URL:-https://${HOST_IP}:${KIBANA_PORT}}
       - BRIDGE_MIN_SEVERITY=${BRIDGE_MIN_SEVERITY:-medium}
       - VT_API_KEY=${VT_API_KEY:-}
+      - CENSYS_API_KEY=${CENSYS_API_KEY:-}
+      - CENSYS_ORG_ID=${CENSYS_ORG_ID:-}
+      - CENSYS_MONTHLY_LIMIT=${CENSYS_MONTHLY_LIMIT:-100}
     mem_limit: 128m
     volumes:
       - bridgestate:/state

@@ -5,7 +5,8 @@ Every POLL_SECONDS, reads open Security alerts at or above BRIDGE_MIN_SEVERITY a
 creates one IRIS alert each: title, severity, a link back to the Kibana alert, the
 alert document, IOCs (IPs, domains, URLs, hashes) and assets (internal IPs, named
 from Zeek's DHCP log). IRIS then links alerts that share IOCs ("similar alerts"),
-and its VirusTotal module enriches IOCs when VT_API_KEY is set.
+and its VirusTotal module enriches IOCs when VT_API_KEY is set. External IPs are also
+looked up in Censys when CENSYS_API_KEY is set (cached, with a monthly budget).
 
 Python standard library only. Reads ES as the least-privilege moat_bridge user.
 State (forwarded alert ids + high-water mark) lives in /state so restarts never
@@ -21,6 +22,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 ES_URL = os.environ["ES_URL"]
 ES_AUTH = "Basic " + base64.b64encode(f"moat_bridge:{os.environ['BRIDGE_ES_PASSWORD']}".encode()).decode()
@@ -28,6 +30,11 @@ IRIS_URL = os.environ["IRIS_URL"].rstrip("/")
 IRIS_KEY = os.environ["IRIS_API_KEY"]
 KIBANA = os.environ.get("KIBANA_PUBLIC_URL", "").rstrip("/")
 VT_KEY = os.environ.get("VT_API_KEY", "").strip()
+CENSYS_KEY = os.environ.get("CENSYS_API_KEY", "").strip()
+CENSYS_ORG = os.environ.get("CENSYS_ORG_ID", "").strip()
+CENSYS_LIMIT = int(os.environ.get("CENSYS_MONTHLY_LIMIT", "100"))
+CENSYS_URL = "https://api.platform.censys.io/v3/global/asset/host/"
+CENSYS_TTL = timedelta(days=30)
 MIN_SEV = os.environ.get("BRIDGE_MIN_SEVERITY", "medium").lower()
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "60"))
 STATE_FILE = "/state/state.json"
@@ -138,6 +145,111 @@ def configure_virustotal():
     log("VirusTotal module configured and enabled")
 
 
+# ---------------------------------------------------------------- Censys
+def censys_summary(res):
+    """One line about a host: who owns it, what it exposes. Defensive: every field optional."""
+    r = res.get("result") or res
+    r = r.get("resource") or r
+    asn = r.get("autonomous_system") or {}
+    loc = r.get("location") or {}
+    parts = []
+    owner = " ".join(str(x) for x in (f"AS{asn['asn']}" if asn.get("asn") else "", asn.get("name") or "") if x)
+    country = loc.get("country_code") or loc.get("country")
+    if owner:
+        parts.append(owner + (f" ({country})" if country else ""))
+    ports = {}  # one entry per port; "UNKNOWN" only when nothing better is known
+    for sv in r.get("services") or []:
+        if isinstance(sv, dict) and sv.get("port"):
+            name = sv.get("protocol") or sv.get("service_name") or sv.get("extended_service_name") or ""
+            names_for = ports.setdefault(sv["port"], [])
+            if name and name.upper() != "UNKNOWN" and name not in names_for:
+                names_for.append(name)
+    svcs = [f"{p}/{'+'.join(n)}" if n else str(p) for p, n in sorted(ports.items())]
+    if svcs:
+        more = f" (+{len(svcs) - 8} more)" if len(svcs) > 8 else ""
+        parts.append("open: " + ", ".join(svcs[:8]) + more)
+    names = ((r.get("dns") or {}).get("reverse_dns") or {}).get("names")
+    if names:
+        parts.append("rDNS: " + ", ".join(names[:3]))
+    labels = [x.get("value") or x.get("name") if isinstance(x, dict) else x for x in r.get("labels") or []]
+    labels = [str(x) for x in labels if x]
+    if labels:
+        parts.append("labels: " + ", ".join(labels[:6]))
+    return "; ".join(parts).replace("&", "and")[:400] or "known to Censys, no details"
+
+
+class Censys:
+    """One lookup per IP per 30 days (cached in the bridge state), an optional monthly cap
+    (CENSYS_MONTHLY_LIMIT, default 100 = the free tier, 0 = none) and a back-off on
+    HTTP 429. Requests are sequential (accounts may allow 1 concurrent action). Failures
+    never block forwarding alerts."""
+
+    def __init__(self, state):
+        self.enabled = bool(CENSYS_KEY)
+        self.cache = state.setdefault("censys", {})
+        self.usage = state.setdefault("censys_usage", {"month": "", "n": 0})
+        now = datetime.now(timezone.utc)
+        for ip in [k for k, v in self.cache.items() if now - datetime.fromisoformat(v["ts"]) > CENSYS_TTL]:
+            del self.cache[ip]
+        self.capped = False
+        self.pause_until = now
+        if self.enabled:
+            self._roll(now)
+            cap = f"/{CENSYS_LIMIT}" if CENSYS_LIMIT else " (no cap)"
+            log(f"Censys enrichment on: {self.usage['n']}{cap} lookups used this month, "
+                f"{len(self.cache)} IPs cached")
+        else:
+            log("CENSYS_API_KEY not set; Censys enrichment off")
+
+    def _roll(self, now):
+        month = now.strftime("%Y-%m")
+        if self.usage["month"] != month:
+            self.usage.update(month=month, n=0)
+            self.capped = False
+
+    def lookup(self, ip):
+        if not self.enabled:
+            return None
+        now = datetime.now(timezone.utc)
+        hit = self.cache.get(ip)
+        if hit:
+            return hit["text"]
+        self._roll(now)
+        if now < self.pause_until:
+            return None
+        if CENSYS_LIMIT and self.usage["n"] >= CENSYS_LIMIT:
+            if not self.capped:
+                log(f"Censys monthly budget reached ({CENSYS_LIMIT}); skipping until next month")
+                self.capped = True
+            return None
+        url = CENSYS_URL + quote(ip, safe="")
+        if CENSYS_ORG:
+            url += "?organization_id=" + quote(CENSYS_ORG, safe="")
+        try:
+            self.usage["n"] += 1
+            text = censys_summary(request("GET", url, headers={
+                "Authorization": f"Bearer {CENSYS_KEY}", "Accept": "application/json"}, timeout=15))
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                text = "no Censys record"
+            elif e.code in (401, 403):
+                log(f"Censys rejected the key (HTTP {e.code}); enrichment off until restart")
+                self.enabled = False
+                return None
+            elif e.code == 429:
+                log("Censys rate limit hit (HTTP 429); pausing lookups for 10 minutes")
+                self.pause_until = now + timedelta(minutes=10)
+                return None
+            else:
+                log(f"Censys lookup of {ip} failed: HTTP {e.code}")
+                return None
+        except Exception as e:  # noqa: BLE001 - enrichment is best-effort
+            log(f"Censys lookup of {ip} failed: {type(e).__name__}: {e}")
+            return None
+        self.cache[ip] = {"ts": now.isoformat(), "text": text}
+        return text
+
+
 # ---------------------------------------------------------------- mapping
 def device_name(ip, cache):
     if ip in cache:
@@ -156,7 +268,7 @@ def device_name(ip, cache):
     return name
 
 
-def to_iris(hit, lk, names):
+def to_iris(hit, lk, names, cz):
     src = hit["_source"]
     f = flatten(src)
 
@@ -169,12 +281,14 @@ def to_iris(hit, lk, names):
 
     iocs, seen = [], set()
 
-    def ioc(value, kind, desc):
+    def ioc(value, kind, desc, tags="moat"):
         tid = lk.ioc_type.get(kind)
         if value and tid and (value, kind) not in seen:
             seen.add((value, kind))
             iocs.append({"ioc_value": str(value), "ioc_type_id": tid, "ioc_tlp_id": tlp,
-                         "ioc_description": desc, "ioc_tags": "moat"})
+                         "ioc_description": desc, "ioc_tags": tags})
+
+    enriched = []
 
     assets = []
     for field, kind in (("source.ip", "ip-src"), ("destination.ip", "ip-dst")):
@@ -187,7 +301,11 @@ def to_iris(hit, lk, names):
                            "asset_ip": ip, "asset_description": f"{field} in '{rule}'",
                            "asset_tags": "moat"})
         else:
-            ioc(ip, kind, f"{field} in '{rule}'")
+            info = cz.lookup(ip)
+            if info:
+                enriched.append(f"{ip}: {info}")
+            ioc(ip, kind, f"{field} in '{rule}'" + (f" | Censys: {info}" if info else ""),
+                "moat,censys" if info else "moat")
     ioc(first(get("dns.question.name")), "domain", "DNS query")
     # Suricata/Zeek HTTP put the host and path in separate fields; rebuild the URL.
     host, path = first(get("url.domain")), first(get("url.original"))
@@ -212,7 +330,8 @@ def to_iris(hit, lk, names):
 
     return {
         "alert_title": title,
-        "alert_description": f"{get('kibana.alert.reason', '')}\n\nKibana: {link}".strip(),
+        "alert_description": (f"{get('kibana.alert.reason', '')}\n\nKibana: {link}"
+                              + "".join(f"\n\nCensys {e}" for e in enriched)).strip(),
         "alert_source": "moat / Elastic Security",
         "alert_source_ref": hit["_id"],
         "alert_source_link": link,
@@ -246,7 +365,7 @@ def save_state(state):
     os.replace(tmp, STATE_FILE)
 
 
-def poll(lk, state):
+def poll(lk, state, cz):
     wanted = SEVERITIES[SEVERITIES.index(MIN_SEV):] if MIN_SEV in SEVERITIES else SEVERITIES[1:]
     since = (datetime.fromisoformat(state["last_ts"]) - timedelta(minutes=5)).isoformat()
     res = es("POST", "/.alerts-security.alerts-*/_search", {
@@ -260,7 +379,7 @@ def poll(lk, state):
         state["last_ts"] = max(state["last_ts"], hit["_source"]["@timestamp"])
         if hit["_id"] in sent:
             continue
-        a = iris("POST", "/alerts/add", to_iris(hit, lk, names))
+        a = iris("POST", "/alerts/add", to_iris(hit, lk, names, cz))
         state["sent"].append(hit["_id"])
         sent.add(hit["_id"])
         n += 1
@@ -280,9 +399,10 @@ def main():
             log(f"waiting for IRIS/ES: {e}")
             time.sleep(15)
     state = load_state()
+    cz = Censys(state)
     while True:
         try:
-            poll(lk, state)
+            poll(lk, state, cz)
         except urllib.error.HTTPError as e:
             log(f"HTTP {e.code} from {e.url}: {e.read()[:300]!r}")
         except Exception as e:  # noqa: BLE001 - one bad poll must not stop the bridge

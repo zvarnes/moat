@@ -44,6 +44,7 @@ Case management uses compose profile `iris` (`IRIS_ENABLED=true` by default in s
   - polls open Security alerts ≥ `BRIDGE_MIN_SEVERITY` every 60 s and creates IRIS alerts via `POST /alerts/add`, with IOCs (external IPs, domains, URLs rebuilt from `url.domain`+`url.original`, hashes) and assets (internal IPs named from `logs-zeek.dhcp-*`);
   - creates the IRIS customer "moat home";
   - sets the VirusTotal module's `api_key` param when `VT_API_KEY` is set;
+  - looks up external IPs in Censys when `CENSYS_API_KEY` is set (Platform API `GET api.platform.censys.io/v3/global/asset/host/{ip}`, Bearer PAT; the old API ID/secret pair is deprecated). Results are cached 30 days in `/state`, requests are sequential (the Rate Limits page shows only "1 concurrent action", but the free tier is 100 lookups/month), `CENSYS_MONTHLY_LIMIT` caps monthly lookups (default 100; 0 = none), and a 429 pauses lookups for 10 min. The summary goes in the IOC description and alert text. Response shape verified live 2026-09-30 (`result.resource` with `autonomous_system`, `location`, `services[]`, `dns`; parsed defensively; summary shows at most 8 ports);
   - keeps state in `/state/state.json` (no duplicates across restarts, verified);
   - reads ES as `moat_bridge` (read on alerts + zeek.dhcp only; bootstrap creates it).
 - New secrets come via `./moat init --add-missing` (appends keys new in `.env.example`, generates secrets, never changes existing values).
